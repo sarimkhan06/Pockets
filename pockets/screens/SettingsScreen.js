@@ -1,6 +1,11 @@
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { supabase } from '../lib/supabase';
 
 export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, currentMethod, navigation }) {
+  const handleLogout = async () => {
+    await supabase.auth.signOut(); // signs out from Supabase, clears the session
+    onLogout(); // tells App.js to switch to the login screen
+  };
   const Row = ({ icon, label, value, onPress, danger }) => (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
       <Text style={styles.rowIcon}>{icon}</Text>
@@ -68,7 +73,7 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, curren
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.section}>
           <Row icon="🔒" label="Change Password" onPress={() => {}} />
-          <Row icon="🚪" label="Sign Out" onPress={onLogout} danger />
+          <Row icon="🚪" label="Sign Out" onPress={handleLogout} danger />
         </View>
 
         <View style={{ height: 40 }} />

@@ -1,13 +1,43 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
+  StyleSheet, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
 } from 'react-native';
+import { supabase } from '../lib/supabase';
 
 export default function LoginScreen({ onLogin, onSignUp }) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    setLoading(true);
+
+    if (isSignUp) {
+      // Create a new account with Supabase Auth
+      const { error } = await supabase.auth.signUp({ email, password });
+
+      if (error) {
+        Alert.alert('Sign up failed', error.message);
+      } else {
+        // New user — take them through onboarding
+        onSignUp();
+      }
+    } else {
+      // Log into an existing account
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+
+      if (error) {
+        Alert.alert('Login failed', error.message);
+      } else {
+        // Existing user — go straight to the main app
+        onLogin();
+      }
+    }
+
+    setLoading(false);
+  };
 
   return (
     <KeyboardAvoidingView
@@ -68,10 +98,14 @@ export default function LoginScreen({ onLogin, onSignUp }) {
 
           <TouchableOpacity
             style={styles.button}
-            onPress={isSignUp ? onSignUp : onLogin}
+            onPress={handleSubmit}
             activeOpacity={0.85}
+            disabled={loading}
           >
-            <Text style={styles.buttonText}>{isSignUp ? 'Create Account' : 'Log In'}</Text>
+            {loading
+              ? <ActivityIndicator color="#0B1120" />
+              : <Text style={styles.buttonText}>{isSignUp ? 'Create Account' : 'Log In'}</Text>
+            }
           </TouchableOpacity>
 
           <TouchableOpacity onPress={() => setIsSignUp(prev => !prev)} style={styles.switchRow}>

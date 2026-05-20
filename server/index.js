@@ -43,7 +43,7 @@ app.post('/pockets', async (req, res) => {
 
 // DELETE /pockets/:id — delete a pocket by id
 app.delete('/pockets/:id', async (req, res) => {
-  const id = parseInt(req.params.id);
+  const id = req.params.id; // uuid stays as a string, no parseInt needed
 
   // .delete() removes rows, .eq('id', id) means "where id equals this value"
   const { error } = await supabase.from('pockets').delete().eq('id', id);
