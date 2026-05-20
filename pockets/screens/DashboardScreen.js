@@ -1,13 +1,56 @@
-import { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
-import { pockets, transactions } from '../data/mockData';
+import { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator } from 'react-native';
 import ChatPanel from '../components/ChatPanel';
+
+// Your computer's local IP — the app uses this to reach your backend server
+const API_URL = 'http://192.168.2.140:3000';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2;
 
 export default function DashboardScreen({ navigation }) {
   const [chatOpen, setChatOpen] = useState(false);
+
+  // Store pockets and transactions from the server in state
+  const [pockets, setPockets] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // useEffect with [] runs once when the screen first loads
+  // This is where we fetch data from the backend
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // fetch() makes an HTTP request — here we're calling GET /pockets and GET /transactions
+        const [pocketsRes, transactionsRes] = await Promise.all([
+          fetch(`${API_URL}/pockets`),
+          fetch(`${API_URL}/transactions`),
+        ]);
+
+        // .json() reads the response body and parses it from JSON into a JS array
+        const pocketsData = await pocketsRes.json();
+        const transactionsData = await transactionsRes.json();
+
+        setPockets(pocketsData);
+        setTransactions(transactionsData);
+      } catch (error) {
+        console.error('Failed to load data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, []);
+
+  // Show a spinner while data is loading
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#00D4AA" />
+      </View>
+    );
+  }
 
   const totalBudget = pockets.reduce((sum, p) => sum + p.budget, 0);
   const totalSpent = pockets.reduce((sum, p) => sum + p.spent, 0);
