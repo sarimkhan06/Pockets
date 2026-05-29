@@ -1,20 +1,42 @@
 import { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Alert,
+  View, Text, TextInput, TouchableOpacity, Switch,
+  StyleSheet, ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
 } from 'react-native';
+
+import { API_URL } from '../lib/config';
 
 const COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
 export default function EditPocketScreen({ route, navigation }) {
   const { pocket } = route.params;
   const [name, setName] = useState(pocket.name);
-  const [budget, setBudget] = useState(String(pocket.budget));
+  const [balance, setBalance] = useState(String(pocket.balance));
   const [selectedColor, setSelectedColor] = useState(pocket.color);
+  const [loading, setLoading] = useState(false);
+  const [includeInDist, setIncludeInDist] = useState(pocket.income_percent != null);
+  const [incomePercent, setIncomePercent] = useState(pocket.income_percent != null ? String(pocket.income_percent) : '');
 
-  const handleSave = () => {
-    // Will connect to backend later
-    navigation.goBack();
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      await fetch(`${API_URL}/pockets/${pocket.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          balance: parseFloat(balance),
+          color: selectedColor,
+          income_percent: includeInDist ? (parseFloat(incomePercent) || null) : null,
+        }),
+      });
+      navigation.navigate('Dashboard');
+    } catch (error) {
+      console.error('Failed to update pocket:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = () => {
@@ -26,7 +48,10 @@ export default function EditPocketScreen({ route, navigation }) {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => navigation.navigate('Dashboard'),
+          onPress: async () => {
+            await fetch(`${API_URL}/pockets/${pocket.id}`, { method: 'DELETE' });
+            navigation.navigate('Dashboard');
+          },
         },
       ]
     );
@@ -52,7 +77,7 @@ export default function EditPocketScreen({ route, navigation }) {
           <View style={[styles.previewTopBar, { backgroundColor: selectedColor }]} />
           <Text style={styles.previewName}>{name || 'Pocket name'}</Text>
           <Text style={[styles.previewAmount, { color: selectedColor }]}>
-            ${budget || '0'}
+            ${balance || '0'}
           </Text>
           <Text style={styles.previewLabel}>budget</Text>
         </View>
@@ -70,13 +95,13 @@ export default function EditPocketScreen({ route, navigation }) {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Budget</Text>
+            <Text style={styles.label}>Balance</Text>
             <View style={styles.amountRow}>
               <Text style={styles.dollarSign}>$</Text>
               <TextInput
                 style={[styles.input, styles.amountInput]}
-                value={budget}
-                onChangeText={setBudget}
+                value={balance}
+                onChangeText={setBalance}
                 placeholder="0.00"
                 placeholderTextColor="#4A5E78"
                 keyboardType="numeric"
@@ -96,10 +121,40 @@ export default function EditPocketScreen({ route, navigation }) {
               ))}
             </View>
           </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Income Distribution</Text>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Include in income split</Text>
+              <Switch
+                value={includeInDist}
+                onValueChange={setIncludeInDist}
+                trackColor={{ false: '#1C2B45', true: 'rgba(0,212,170,0.4)' }}
+                thumbColor={includeInDist ? '#00D4AA' : '#4A5E78'}
+              />
+            </View>
+            {includeInDist && (
+              <View style={[styles.amountRow, { marginTop: 10 }]}>
+                <TextInput
+                  style={[styles.input, styles.amountInput]}
+                  placeholder="0"
+                  placeholderTextColor="#4A5E78"
+                  keyboardType="numeric"
+                  value={incomePercent}
+                  onChangeText={setIncomePercent}
+                />
+                <Text style={styles.percentSign}>% of income</Text>
+              </View>
+            )}
+          </View>
+
         </View>
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.85}>
-          <Text style={styles.saveBtnText}>Save Changes</Text>
+        <TouchableOpacity style={[styles.saveBtn, loading && { opacity: 0.7 }]} onPress={handleSave} disabled={loading} activeOpacity={0.85}>
+          {loading
+            ? <ActivityIndicator color="#0B1120" />
+            : <Text style={styles.saveBtnText}>Save Changes</Text>
+          }
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete} activeOpacity={0.85}>
@@ -151,6 +206,10 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   colorDotSelected: { borderWidth: 3, borderColor: '#FFFFFF' },
+
+  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  toggleLabel: { fontSize: 14, color: '#FFFFFF' },
+  percentSign: { fontSize: 14, color: '#8899AA', marginLeft: 8 },
 
   saveBtn: {
     marginHorizontal: 20, backgroundColor: '#00D4AA',

@@ -1,7 +1,7 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { supabase } from '../lib/supabase';
 
-export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, currentMethod, navigation }) {
+export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, currentMethod, navigation }) {
   const handleLogout = async () => {
     await supabase.auth.signOut(); // signs out from Supabase, clears the session
     onLogout(); // tells App.js to switch to the login screen
@@ -27,14 +27,11 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, curren
         <View style={styles.profileCard}>
           <View style={styles.profileAvatar}>
             <Text style={styles.profileAvatarText}>
-              {profile?.name ? profile.name[0].toUpperCase() : 'S'}
+              {userName ? userName[0].toUpperCase() : '?'}
             </Text>
           </View>
           <View>
-            <Text style={styles.profileName}>{profile?.name ?? 'Your Name'}</Text>
-            <Text style={styles.profileMeta}>
-              {profile?.stage?.label ?? ''}{profile?.age ? `  ·  ${profile.age}` : ''}
-            </Text>
+            <Text style={styles.profileName}>{userName || 'Your Account'}</Text>
           </View>
         </View>
 
@@ -50,8 +47,16 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, curren
               </View>
             </View>
           )}
-          <Row icon="🔄" label="Switch Method" onPress={() => navigation.navigate('SwitchMethod', { currentMethodId: currentMethod?.id })} />
-          <Row icon="📋" label="Retake Quiz" onPress={onRetakeQuiz} />
+          <Row icon="🔄" label="Change Template" onPress={() => {
+            Alert.alert(
+              'Change Template',
+              'This will delete all your current pockets and replace them with new ones. Your transaction history won\'t be affected.\n\nAre you sure?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Continue', style: 'destructive', onPress: onRetakeQuiz },
+              ]
+            );
+          }} />
         </View>
 
         {/* Bank */}
@@ -65,7 +70,6 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, profile, curren
         <Text style={styles.sectionLabel}>Preferences</Text>
         <View style={styles.section}>
           <Row icon="🔔" label="Notifications" value="On" onPress={() => {}} />
-          <Row icon="🤖" label="AI Auto-Assign" value="On" onPress={() => {}} />
           <Row icon="💰" label="Currency" value="CAD" onPress={() => {}} />
         </View>
 

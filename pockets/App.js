@@ -3,34 +3,52 @@ import { StyleSheet, Platform, StatusBar, ActivityIndicator, View } from 'react-
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from './lib/supabase';
+import { API_URL } from './lib/config';
+import { TEMPLATES } from './data/onboardingData';
 import LoginScreen from './screens/LoginScreen';
 import OnboardingFlow from './screens/OnboardingFlow';
 import MainNavigator from './navigation/MainNavigator';
 
 export default function App() {
   const [screen, setScreen] = useState('loading'); // 'loading' | 'login' | 'onboarding' | 'main'
-  const [profile, setProfile] = useState(null);
+  const [userName, setUserName] = useState('');
   const [currentMethod, setCurrentMethod] = useState(null);
+  const [signUpUser, setSignUpUser] = useState(null);
+  const [isRetake, setIsRetake] = useState(false);
 
   useEffect(() => {
     // Check if the user already has an active session when the app opens
-    // If yes, skip login and go straight to main
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setScreen(session ? 'main' : 'login');
+    // If yes, fetch their saved budgeting method and go straight to main
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) { setScreen('login'); return; }
+
+      const name = session.user.user_metadata?.full_name || '';
+      setUserName(name);
+
+      try {
+        const res = await fetch(`${API_URL}/user-settings?userId=${session.user.id}`);
+        const settings = await res.json();
+        if (settings?.method_id) setCurrentMethod(TEMPLATES[settings.method_id]);
+      } catch (e) {
+        console.error('Failed to fetch user settings:', e);
+      }
+      setScreen('main');
     });
 
-    // Listen for auth changes — fires when user logs in, logs out, or session expires
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) setScreen('login'); // session ended — send back to login
+    // Listen for auth changes — only send to login on explicit sign-out
+    // SIGNED_UP fires with a null session when email confirmation is required, so we
+    // must not treat every null-session event as a logout
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, _session) => {
+      if (event === 'SIGNED_OUT') setScreen('login');
     });
 
     // Clean up the listener when the component unmounts
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleOnboardingComplete = ({ method, profile: profileData }) => {
+  const handleOnboardingComplete = ({ method }) => {
     setCurrentMethod(method);
-    setProfile(profileData);
+    setIsRetake(false);
     setScreen('main');
   };
 
@@ -51,20 +69,25 @@ export default function App() {
         {screen === 'login' && (
           <LoginScreen
             onLogin={() => setScreen('main')}
-            onSignUp={() => setScreen('onboarding')}
+            onSignUp={(user) => { setSignUpUser(user); setScreen('onboarding'); }}
           />
         )}
 
         {screen === 'onboarding' && (
-          <OnboardingFlow onComplete={handleOnboardingComplete} />
+          <OnboardingFlow
+            onComplete={handleOnboardingComplete}
+            signUpUser={signUpUser}
+            isRetake={isRetake}
+            onCancel={isRetake ? () => { setIsRetake(false); setScreen('main'); } : null}
+          />
         )}
 
         {screen === 'main' && (
           <NavigationContainer>
             <MainNavigator
               onLogout={() => setScreen('login')}
-              onRetakeQuiz={() => setScreen('onboarding')}
-              profile={profile}
+              onRetakeQuiz={() => { setIsRetake(true); setScreen('onboarding'); }}
+              userName={userName}
               currentMethod={currentMethod}
             />
           </NavigationContainer>

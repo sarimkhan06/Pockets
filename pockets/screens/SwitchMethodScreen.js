@@ -1,5 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
-import { METHODS } from '../data/onboardingData';
+import { TEMPLATES } from '../data/onboardingData';
 
 export default function SwitchMethodScreen({ navigation, route }) {
   const currentMethodId = route.params?.currentMethodId;
@@ -19,7 +19,7 @@ export default function SwitchMethodScreen({ navigation, route }) {
           Switching methods will update your starter pockets. Any pockets you've added won't be affected.
         </Text>
 
-        {Object.values(METHODS).map(method => {
+        {Object.values(TEMPLATES).map(method => {
           const isActive = method.id === currentMethodId;
           return (
             <TouchableOpacity

@@ -1,19 +1,49 @@
 import { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, ScrollView, KeyboardAvoidingView, Platform,
+  View, Text, TextInput, TouchableOpacity, Switch,
+  StyleSheet, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
 } from 'react-native';
+
+import { API_URL } from '../lib/config';
+import { supabase } from '../lib/supabase';
 
 const COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
 export default function AddPocketScreen({ navigation }) {
   const [name, setName] = useState('');
-  const [budget, setBudget] = useState('');
+  const [balance, setBalance] = useState('');
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
+  const [loading, setLoading] = useState(false);
+  const [includeInDist, setIncludeInDist] = useState(false);
+  const [incomePercent, setIncomePercent] = useState('');
 
-  const handleSave = () => {
-    // Will connect to backend later — for now just go back
-    navigation.goBack();
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      const res = await fetch(`${API_URL}/pockets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          balance: parseFloat(balance),
+          color: selectedColor,
+          income_percent: includeInDist ? (parseFloat(incomePercent) || null) : null,
+          userId,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        Alert.alert('Error', data.error);
+      } else {
+        navigation.navigate('Dashboard');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Could not connect to server. Is it running?');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -37,7 +67,7 @@ export default function AddPocketScreen({ navigation }) {
           <View style={[styles.previewTopBar, { backgroundColor: selectedColor }]} />
           <Text style={styles.previewName}>{name || 'Pocket name'}</Text>
           <Text style={[styles.previewAmount, { color: selectedColor }]}>
-            ${budget || '0'}
+            ${balance || '0'}
           </Text>
           <Text style={styles.previewLabel}>budget</Text>
         </View>
@@ -57,7 +87,7 @@ export default function AddPocketScreen({ navigation }) {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Monthly Budget</Text>
+            <Text style={styles.label}>Starting Balance</Text>
             <View style={styles.amountRow}>
               <Text style={styles.dollarSign}>$</Text>
               <TextInput
@@ -65,8 +95,8 @@ export default function AddPocketScreen({ navigation }) {
                 placeholder="0.00"
                 placeholderTextColor="#4A5E78"
                 keyboardType="numeric"
-                value={budget}
-                onChangeText={setBudget}
+                value={balance}
+                onChangeText={setBalance}
               />
             </View>
           </View>
@@ -84,15 +114,44 @@ export default function AddPocketScreen({ navigation }) {
             </View>
           </View>
 
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Income Distribution</Text>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Include in income split</Text>
+              <Switch
+                value={includeInDist}
+                onValueChange={setIncludeInDist}
+                trackColor={{ false: '#1C2B45', true: 'rgba(0,212,170,0.4)' }}
+                thumbColor={includeInDist ? '#00D4AA' : '#4A5E78'}
+              />
+            </View>
+            {includeInDist && (
+              <View style={[styles.amountRow, { marginTop: 10 }]}>
+                <TextInput
+                  style={[styles.input, styles.amountInput]}
+                  placeholder="0"
+                  placeholderTextColor="#4A5E78"
+                  keyboardType="numeric"
+                  value={incomePercent}
+                  onChangeText={setIncomePercent}
+                />
+                <Text style={styles.percentSign}>% of income</Text>
+              </View>
+            )}
+          </View>
+
         </View>
 
         <TouchableOpacity
-          style={[styles.saveBtn, (!name || !budget) && styles.saveBtnDisabled]}
+          style={[styles.saveBtn, (!name || !balance || loading) && styles.saveBtnDisabled]}
           onPress={handleSave}
-          disabled={!name || !budget}
+          disabled={!name || !balance || loading}
           activeOpacity={0.85}
         >
-          <Text style={styles.saveBtnText}>Create Pocket</Text>
+          {loading
+            ? <ActivityIndicator color="#0B1120" />
+            : <Text style={styles.saveBtnText}>Create Pocket</Text>
+          }
         </TouchableOpacity>
 
         <View style={{ height: 40 }} />
@@ -142,6 +201,10 @@ const styles = StyleSheet.create({
   colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },
   colorDotSelected: { borderWidth: 3, borderColor: '#FFFFFF' },
+
+  toggleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  toggleLabel: { fontSize: 14, color: '#FFFFFF' },
+  percentSign: { fontSize: 14, color: '#8899AA', marginLeft: 8 },
 
   saveBtn: {
     marginHorizontal: 20, backgroundColor: '#00D4AA',

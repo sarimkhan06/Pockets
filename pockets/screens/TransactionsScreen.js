@@ -1,16 +1,51 @@
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { transactions, pockets } from '../data/mockData';
+import { useState, useCallback } from 'react';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+
+import { API_URL } from '../lib/config';
+import { formatDate, sortTxNewestFirst } from '../lib/utils';
+import { supabase } from '../lib/supabase';
 
 export default function TransactionsScreen() {
-  const getPocketName = (pocketId) => {
-    if (!pocketId) return 'Unassigned';
-    return pockets.find(p => p.id === pocketId)?.name ?? 'Unknown';
-  };
+  const [transactions, setTransactions] = useState([]);
+  const [pockets, setPockets] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const getPocketColor = (pocketId) => {
-    if (!pocketId) return '#4A5E78';
-    return pockets.find(p => p.id === pocketId)?.color ?? '#4A5E78';
-  };
+  useFocusEffect(
+    useCallback(() => {
+      const loadData = async () => {
+        setLoading(true);
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const userId = session?.user?.id;
+
+          const [txRes, pocketsRes] = await Promise.all([
+            fetch(`${API_URL}/transactions?userId=${userId}`),
+            fetch(`${API_URL}/pockets?userId=${userId}`),
+          ]);
+          setTransactions(await txRes.json());
+          setPockets(await pocketsRes.json());
+        } catch (e) {
+          console.error('Failed to load transactions:', e);
+        } finally {
+          setLoading(false);
+        }
+      };
+      loadData();
+    }, [])
+  );
+
+  const getPocket = (pocketId) => pockets.find(p => p.id === pocketId);
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#00D4AA" />
+      </View>
+    );
+  }
+
+  const sorted = sortTxNewestFirst(transactions);
 
   return (
     <View style={styles.container}>
@@ -19,37 +54,44 @@ export default function TransactionsScreen() {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.txCard}>
-          {transactions.map((tx, index) => {
-            const pocketName = getPocketName(tx.pocketId);
-            const pocketColor = getPocketColor(tx.pocketId);
-            return (
-              <View
-                key={tx.id}
-                style={[styles.txRow, index < transactions.length - 1 && styles.txBorder]}
-              >
-                <View style={styles.txIcon}>
-                  <Text style={styles.txEmoji}>{tx.icon}</Text>
-                </View>
-                <View style={styles.txDetails}>
-                  <Text style={styles.txMerchant}>{tx.merchant}</Text>
-                  <View style={styles.txMeta}>
-                    <Text style={styles.txDate}>{tx.date}</Text>
-                    <Text style={styles.txDot}> · </Text>
-                    <View style={[styles.pocketTag, { backgroundColor: pocketColor + '22' }]}>
-                      <Text style={[styles.pocketTagText, { color: pocketColor }]}>
-                        {pocketName}
-                      </Text>
+        {sorted.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>No transactions yet.</Text>
+          </View>
+        ) : (
+          <View style={styles.txCard}>
+            {sorted.map((tx, index) => {
+              const pocket = getPocket(tx.pocket_id);
+              const pocketColor = pocket?.color ?? '#4A5E78';
+              const pocketName = pocket?.name ?? (tx.pocket_id ? 'Unknown' : 'Inbox');
+              return (
+                <View
+                  key={tx.id}
+                  style={[styles.txRow, index < sorted.length - 1 && styles.txBorder]}
+                >
+                  <View style={styles.txIcon}>
+                    <Text style={styles.txEmoji}>{tx.icon}</Text>
+                  </View>
+                  <View style={styles.txDetails}>
+                    <Text style={styles.txMerchant}>{tx.merchant}</Text>
+                    <View style={styles.txMeta}>
+                      <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
+                      <Text style={styles.txDot}> · </Text>
+                      <View style={[styles.pocketTag, { backgroundColor: pocketColor + '22' }]}>
+                        <Text style={[styles.pocketTagText, { color: pocketColor }]}>
+                          {pocketName}
+                        </Text>
+                      </View>
                     </View>
                   </View>
+                  <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
+                    {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
+                  </Text>
                 </View>
-                <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
-                  {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
-                </Text>
-              </View>
-            );
-          })}
-        </View>
+              );
+            })}
+          </View>
+        )}
         <View style={{ height: 40 }} />
       </ScrollView>
     </View>
@@ -60,6 +102,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B1120' },
   header: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.5 },
+
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyText: { fontSize: 15, color: '#8899AA' },
 
   txCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,

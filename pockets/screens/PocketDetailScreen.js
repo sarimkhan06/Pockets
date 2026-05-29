@@ -1,11 +1,33 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
-import { transactions } from '../data/mockData';
+import { useState, useCallback } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+
+import { API_URL } from '../lib/config';
+import { formatDate } from '../lib/utils';
 
 export default function PocketDetailScreen({ route, navigation }) {
   const { pocket } = route.params;
-  const pct = pocket.spent / pocket.budget;
-  const left = pocket.budget - pocket.spent;
-  const pocketTransactions = transactions.filter(tx => tx.pocketId === pocket.id);
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      const loadTransactions = async () => {
+        setLoading(true);
+        try {
+          const res = await fetch(`${API_URL}/transactions/pocket/${pocket.id}`);
+          const data = await res.json();
+          setTransactions([...data].reverse());
+        } catch (error) {
+          console.error('Failed to load transactions:', error);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      loadTransactions();
+    }, [pocket.id])
+  );
 
   return (
     <View style={styles.container}>
@@ -28,51 +50,43 @@ export default function PocketDetailScreen({ route, navigation }) {
 
         {/* Pocket summary card */}
         <View style={[styles.summaryCard, { borderTopColor: pocket.color }]}>
-          <Text style={styles.summaryLabel}>Remaining</Text>
-          <Text style={[styles.summaryAmount, left <= 0 && styles.summaryDepleted]}>
-            ${left}
+          <Text style={styles.summaryLabel}>Available</Text>
+          <Text style={[styles.summaryAmount, pocket.balance <= 0 && styles.summaryDepleted]}>
+            ${pocket.balance.toFixed(2)}
           </Text>
-          <View style={styles.progressBg}>
-            <View
-              style={[
-                styles.progressFill,
-                { width: `${Math.min(pct * 100, 100)}%`, backgroundColor: pocket.color },
-              ]}
-            />
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryMeta}>Spent: <Text style={styles.summarySpent}>${pocket.spent}</Text></Text>
-            <Text style={styles.summaryMeta}>Budget: <Text style={styles.summaryWhite}>${pocket.budget}</Text></Text>
-          </View>
         </View>
 
         {/* Transactions */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Transactions</Text>
-          <View style={[styles.badge, { backgroundColor: pocket.color + '22' }]}>
-            <Text style={[styles.badgeText, { color: pocket.color }]}>
-              {pocketTransactions.length}
-            </Text>
-          </View>
+          {!loading && (
+            <View style={[styles.badge, { backgroundColor: pocket.color + '22' }]}>
+              <Text style={[styles.badgeText, { color: pocket.color }]}>
+                {transactions.length}
+              </Text>
+            </View>
+          )}
         </View>
 
-        {pocketTransactions.length === 0 ? (
+        {loading ? (
+          <ActivityIndicator color="#00D4AA" style={{ marginTop: 40 }} />
+        ) : transactions.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No transactions yet</Text>
           </View>
         ) : (
           <View style={styles.txCard}>
-            {pocketTransactions.map((tx, index) => (
+            {transactions.map((tx, index) => (
               <View
                 key={tx.id}
-                style={[styles.txRow, index < pocketTransactions.length - 1 && styles.txBorder]}
+                style={[styles.txRow, index < transactions.length - 1 && styles.txBorder]}
               >
                 <View style={styles.txIcon}>
                   <Text style={styles.txEmoji}>{tx.icon}</Text>
                 </View>
                 <View style={styles.txDetails}>
                   <Text style={styles.txMerchant}>{tx.merchant}</Text>
-                  <Text style={styles.txDate}>{tx.date}</Text>
+                  <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
                 </View>
                 <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
                   {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
@@ -101,7 +115,6 @@ const styles = StyleSheet.create({
   },
   backText: { fontSize: 20, color: '#FFFFFF' },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
-  headerSpacer: { width: 38 },
   editBtn: {
     backgroundColor: '#151F32', borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 6,

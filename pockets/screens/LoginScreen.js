@@ -7,22 +7,32 @@ import { supabase } from '../lib/supabase';
 
 export default function LoginScreen({ onLogin, onSignUp }) {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
+    if (isSignUp && password !== confirmPassword) {
+      Alert.alert('Passwords do not match', 'Please make sure both passwords are the same.');
+      return;
+    }
+
     setLoading(true);
 
     if (isSignUp) {
-      // Create a new account with Supabase Auth
-      const { error } = await supabase.auth.signUp({ email, password });
-
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { full_name: fullName.trim() } },
+      });
       if (error) {
         Alert.alert('Sign up failed', error.message);
+      } else if (!data.user) {
+        Alert.alert('Already registered', 'This email already has an account. Try logging in instead.');
       } else {
-        // New user — take them through onboarding
-        onSignUp();
+        onSignUp(data.user);
       }
     } else {
       // Log into an existing account
@@ -67,6 +77,8 @@ export default function LoginScreen({ onLogin, onSignUp }) {
                 placeholder="Your name"
                 placeholderTextColor="#4A5E78"
                 autoCapitalize="words"
+                value={fullName}
+                onChangeText={setFullName}
               />
             </View>
           )}
@@ -96,6 +108,26 @@ export default function LoginScreen({ onLogin, onSignUp }) {
             />
           </View>
 
+          {isSignUp && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  confirmPassword.length > 0 && confirmPassword !== password && styles.inputError,
+                ]}
+                placeholder="••••••••"
+                placeholderTextColor="#4A5E78"
+                secureTextEntry
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+              {confirmPassword.length > 0 && confirmPassword !== password && (
+                <Text style={styles.errorText}>Passwords don't match</Text>
+              )}
+            </View>
+          )}
+
           <TouchableOpacity
             style={styles.button}
             onPress={handleSubmit}
@@ -108,7 +140,7 @@ export default function LoginScreen({ onLogin, onSignUp }) {
             }
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => setIsSignUp(prev => !prev)} style={styles.switchRow}>
+          <TouchableOpacity onPress={() => { setIsSignUp(prev => !prev); setConfirmPassword(''); setFullName(''); }} style={styles.switchRow}>
             <Text style={styles.switchText}>
               {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
               <Text style={styles.switchLink}>{isSignUp ? 'Log in' : 'Sign up'}</Text>
@@ -191,6 +223,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.07)',
+  },
+  inputError: {
+    borderColor: '#FF5252',
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#FF5252',
+    marginTop: 4,
   },
   button: {
     backgroundColor: '#00D4AA',

@@ -26,7 +26,7 @@ function HomeStack() {
   );
 }
 
-function SettingsStack({ onLogout, onRetakeQuiz, profile, currentMethod }) {
+function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="SettingsMain">
@@ -35,7 +35,7 @@ function SettingsStack({ onLogout, onRetakeQuiz, profile, currentMethod }) {
             {...props}
             onLogout={onLogout}
             onRetakeQuiz={onRetakeQuiz}
-            profile={profile}
+            userName={userName}
             currentMethod={currentMethod}
           />
         )}
@@ -50,7 +50,7 @@ function SettingsStack({ onLogout, onRetakeQuiz, profile, currentMethod }) {
   );
 }
 
-export default function MainNavigator({ onLogout, onRetakeQuiz, profile, currentMethod }) {
+export default function MainNavigator({ onLogout, onRetakeQuiz, userName, currentMethod }) {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -90,7 +90,7 @@ export default function MainNavigator({ onLogout, onRetakeQuiz, profile, current
           <SettingsStack
             onLogout={onLogout}
             onRetakeQuiz={onRetakeQuiz}
-            profile={profile}
+            userName={userName}
             currentMethod={currentMethod}
           />
         )}
