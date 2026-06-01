@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Alert,
   ScrollView, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
@@ -331,7 +331,7 @@ function ConnectBankStep({ signUpUser, onComplete }) {
           >
             {syncing
               ? <ActivityIndicator color="#0B1120" />
-              : <Text style={styles.btnText}>Go to my pockets →</Text>
+              : <Text style={styles.btnText}>Continue →</Text>
             }
           </TouchableOpacity>
         ) : (
@@ -490,10 +490,124 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
   );
 }
 
+// ─── Step 5: Set up 2FA ───────────────────────────────────────────────────────
+
+function MFAStep({ onComplete }) {
+  const [loading, setLoading] = useState(true);
+  const [secret, setSecret] = useState(null);
+  const [factorId, setFactorId] = useState(null);
+  const [code, setCode] = useState('');
+  const [verifying, setVerifying] = useState(false);
+
+  useEffect(() => {
+    const enroll = async () => {
+      try {
+        const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' });
+        if (error) throw error;
+        setSecret(data.totp.secret);
+        setFactorId(data.id);
+      } catch (e) {
+        Alert.alert('Error', e.message || 'Failed to set up 2FA. You can enable it later in Settings.');
+        onComplete();
+      } finally {
+        setLoading(false);
+      }
+    };
+    enroll();
+  }, []);
+
+  const handleVerify = async () => {
+    if (code.length !== 6) return;
+    setVerifying(true);
+    try {
+      const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code });
+      if (error) throw error;
+      onComplete();
+    } catch (e) {
+      Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
+      setCode('');
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0B1120', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#00D4AA" />
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: '#0B1120' }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        <View style={styles.topSection}>
+          <Text style={styles.stepLabel}>Security</Text>
+          <Text style={styles.title}>Secure your account</Text>
+          <Text style={styles.subtitle}>
+            Since your bank is now connected, we strongly recommend enabling two-factor authentication. Without it, anyone who gets your password can access your financial data.
+          </Text>
+        </View>
+
+        <View style={styles.mfaWarningCard}>
+          <Text style={styles.mfaWarningText}>
+            🔒 Highly recommended — your account contains sensitive financial data. Skipping this puts your account at risk.
+          </Text>
+        </View>
+
+        <View style={[styles.topSection, { paddingTop: 16, paddingBottom: 8 }]}>
+          <Text style={styles.subtitle}>
+            Open any authenticator app (Authy, Microsoft Authenticator, 1Password, etc.), tap + or "Add account", choose "Enter a setup key", and type in the key below.
+          </Text>
+        </View>
+
+        <View style={styles.mfaSecretCard}>
+          <Text style={styles.mfaSecretLabel}>Setup key — tap and hold to copy</Text>
+          <Text style={styles.mfaSecretKey} selectable>{secret}</Text>
+        </View>
+
+        <View style={styles.mfaCodeSection}>
+          <Text style={styles.mfaCodeLabel}>Enter the 6-digit code from your app to confirm</Text>
+          <TextInput
+            style={styles.mfaCodeInput}
+            value={code}
+            onChangeText={v => setCode(v.replace(/\D/g, '').slice(0, 6))}
+            keyboardType="number-pad"
+            placeholder="000000"
+            placeholderTextColor="#4A5E78"
+            maxLength={6}
+            textAlign="center"
+          />
+        </View>
+
+        <View style={styles.bankFooter}>
+          <TouchableOpacity
+            style={[styles.btn, styles.bankContinueBtn, (code.length !== 6 || verifying) && styles.btnDisabled]}
+            onPress={handleVerify}
+            disabled={code.length !== 6 || verifying}
+            activeOpacity={0.85}
+          >
+            {verifying
+              ? <ActivityIndicator color="#0B1120" />
+              : <Text style={styles.btnText}>Enable 2FA →</Text>
+            }
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function OnboardingFlow({ onComplete, signUpUser, isRetake, currentMethodId, onCancel }) {
-  const [step, setStep] = useState('template'); // 'template' | 'bank' | 'setup'
+  const [step, setStep] = useState('template'); // 'template' | 'bank' | 'setup' | 'mfa'
   const [selectedMethod, setSelectedMethod] = useState(null);
   const [bankBalance, setBankBalance] = useState(0);
 
@@ -511,7 +625,7 @@ export default function OnboardingFlow({ onComplete, signUpUser, isRetake, curre
       setBankBalance(balance);
       setStep('setup');
     } else {
-      onComplete({ method: selectedMethod });
+      setStep('mfa');
     }
   };
 
@@ -535,8 +649,11 @@ export default function OnboardingFlow({ onComplete, signUpUser, isRetake, curre
         <SetupPocketsStep
           bankBalance={bankBalance}
           signUpUser={signUpUser}
-          onComplete={() => onComplete({ method: selectedMethod })}
+          onComplete={() => setStep('mfa')}
         />
+      )}
+      {step === 'mfa' && (
+        <MFAStep onComplete={() => onComplete({ method: selectedMethod })} />
       )}
       {onCancel && step === 'template' && (
         <TouchableOpacity style={styles.cancelBtn} onPress={onCancel} activeOpacity={0.7}>
@@ -674,4 +791,26 @@ const styles = StyleSheet.create({
 
   addRowBtn: { marginHorizontal: 20, marginTop: 12, paddingVertical: 12, alignItems: 'center' },
   addRowBtnText: { fontSize: 14, color: '#00D4AA', fontWeight: '600' },
+
+  mfaWarningCard: {
+    marginHorizontal: 24, backgroundColor: 'rgba(255,159,67,0.1)', borderRadius: 12,
+    padding: 14, borderWidth: 1, borderColor: 'rgba(255,159,67,0.3)', marginBottom: 8,
+  },
+  mfaWarningText: { fontSize: 13, color: '#FF9F43', lineHeight: 20, fontWeight: '500' },
+
+  mfaSecretCard: {
+    marginHorizontal: 24, backgroundColor: '#151F32', borderRadius: 14,
+    padding: 16, borderWidth: 1, borderColor: 'rgba(0,212,170,0.2)', marginBottom: 24,
+  },
+  mfaSecretLabel: { fontSize: 11, fontWeight: '700', color: '#8899AA', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 },
+  mfaSecretKey: { fontSize: 15, color: '#00D4AA', fontWeight: '700', letterSpacing: 1.5, lineHeight: 24 },
+
+  mfaCodeSection: { paddingHorizontal: 24, marginBottom: 24 },
+  mfaCodeLabel: { fontSize: 13, color: '#8899AA', marginBottom: 12, lineHeight: 18 },
+  mfaCodeInput: {
+    backgroundColor: '#151F32', borderRadius: 14,
+    paddingVertical: 16, fontSize: 28, fontWeight: '800',
+    color: '#FFFFFF', letterSpacing: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+  },
 });

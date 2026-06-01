@@ -206,6 +206,8 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
         {/* Account */}
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.section}>
+          <Row icon="🔐" label="Two-Factor Auth" value="Enabled" />
+          <Row icon="🔑" label="Change Password" onPress={() => navigation.navigate('ChangePassword')} />
           <Row icon="🚪" label="Sign Out" onPress={handleLogout} danger />
         </View>
 

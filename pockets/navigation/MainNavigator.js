@@ -11,6 +11,8 @@ import InboxScreen from '../screens/InboxScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ConnectBankScreen from '../screens/ConnectBankScreen';
 import SwitchMethodScreen from '../screens/SwitchMethodScreen';
+import MFASetupScreen from '../screens/MFASetupScreen';
+import ChangePasswordScreen from '../screens/ChangePasswordScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -44,6 +46,8 @@ function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod, onRest
         )}
       </Stack.Screen>
       <Stack.Screen name="ConnectBank" component={ConnectBankScreen} />
+      <Stack.Screen name="MFASetup" component={MFASetupScreen} />
+      <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
       <Stack.Screen name="SwitchMethod">
         {(props) => (
           <SwitchMethodScreen {...props} />

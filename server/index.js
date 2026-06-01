@@ -156,12 +156,10 @@ app.delete('/pockets/user/:userId', async (req, res) => {
   // Capture the current method before anything changes so restore can flip back to it
   const { data: currentSettings } = await supabase.from('user_settings')
     .select('method_id').eq('user_id', userId).single();
-  console.log('[DELETE /pockets/user] current method_id:', currentSettings?.method_id);
   if (currentSettings?.method_id) {
-    const { error: prevErr } = await supabase.from('user_settings')
+    await supabase.from('user_settings')
       .update({ previous_method_id: currentSettings.method_id })
       .eq('user_id', userId);
-    console.log('[DELETE /pockets/user] saved previous_method_id, error:', prevErr?.message ?? 'none');
   }
 
   // Permanently remove any previous backup first (only keep one backup at a time)
@@ -208,9 +206,7 @@ app.post('/pockets/backup/restore', async (req, res) => {
   // Swap method IDs — use previous_method_id from DB, or targetMethodId passed from client
   const { data: settings } = await supabase.from('user_settings')
     .select('method_id, previous_method_id').eq('user_id', userId).single();
-  console.log('[RESTORE] DB method_id:', settings?.method_id, '| DB previous_method_id:', settings?.previous_method_id, '| client targetMethodId:', targetMethodId);
   const restoredMethodId = settings?.previous_method_id || targetMethodId || null;
-  console.log('[RESTORE] restoredMethodId:', restoredMethodId);
   if (restoredMethodId) {
     await supabase.from('user_settings').update({
       method_id: restoredMethodId,
@@ -403,25 +399,19 @@ app.get('/user-settings', async (req, res) => {
 // POST /user-settings — save (or update) a user's budgeting method
 app.post('/user-settings', async (req, res) => {
   const { userId, methodId, previousMethodId } = req.body;
-  console.log('[POST /user-settings] methodId:', methodId, '| previousMethodId:', previousMethodId);
-
   const fields = { method_id: methodId };
   if (previousMethodId !== undefined) fields.previous_method_id = previousMethodId;
 
   // Use explicit insert-or-update instead of upsert so no unique constraint is needed
   const { data: existing, error: selectErr } = await supabase
     .from('user_settings').select('id').eq('user_id', userId).maybeSingle();
-  console.log('[POST /user-settings] userId:', userId, '| existing row:', existing, '| selectErr:', selectErr?.message ?? 'none');
-
   let data, error;
   if (existing) {
     ({ data, error } = await supabase
       .from('user_settings').update(fields).eq('user_id', userId).select().single());
-    console.log('[POST /user-settings] UPDATE result - data:', data, '| error:', error?.message ?? 'none');
   } else {
     ({ data, error } = await supabase
       .from('user_settings').insert({ user_id: userId, ...fields }).select().single());
-    console.log('[POST /user-settings] INSERT result - data:', data, '| error:', error?.message ?? 'none');
   }
 
   if (error) return res.status(500).json({ error: error.message });
@@ -622,6 +612,144 @@ app.post('/plaid/initialize-pocket-balances', async (req, res) => {
     console.error('Initialize pocket balances error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to initialize pocket balances' });
   }
+});
+
+// GET /reset-password — serves the password reset page linked from Supabase emails
+app.get('/reset-password', (req, res) => {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_ANON_KEY;
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reset Password — Pockets</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; background: #0B1120; color: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .card { background: #151F32; border-radius: 20px; padding: 28px; width: 100%; max-width: 400px; border: 1px solid rgba(255,255,255,0.07); }
+    .logo { font-size: 28px; font-weight: 800; color: #00D4AA; margin-bottom: 8px; }
+    h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    p { font-size: 14px; color: #8899AA; margin-bottom: 24px; line-height: 1.5; }
+    label { font-size: 12px; font-weight: 600; color: #8899AA; display: block; margin-bottom: 6px; }
+    input { width: 100%; background: #1C2B45; border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; padding: 14px 16px; font-size: 14px; color: #fff; margin-bottom: 16px; }
+    input.code { font-size: 24px; font-weight: 800; letter-spacing: 8px; text-align: center; }
+    button { width: 100%; background: #00D4AA; color: #0B1120; border: none; border-radius: 14px; padding: 15px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 4px; }
+    button:disabled { background: #1C2B45; color: #4A5E78; cursor: not-allowed; }
+    .msg { font-size: 14px; margin-top: 16px; text-align: center; }
+    .error { color: #FF5252; }
+    .success { color: #00D4AA; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">Pockets</div>
+
+    <!-- Step 1: MFA verification -->
+    <div id="mfaStep">
+      <h1>Verify your identity</h1>
+      <p>Enter the 6-digit code from your authenticator app to continue.</p>
+      <label>Authenticator Code</label>
+      <input type="number" id="mfaCode" class="code" placeholder="000000" maxlength="6" />
+      <button id="mfaBtn" onclick="verifyMFA()">Verify</button>
+      <div id="mfaMsg" class="msg"></div>
+    </div>
+
+    <!-- Step 2: New password -->
+    <div id="passwordStep" class="hidden">
+      <h1>Reset your password</h1>
+      <p>Choose a new password for your account.</p>
+      <label>New Password</label>
+      <input type="password" id="password" placeholder="••••••••" />
+      <label>Confirm Password</label>
+      <input type="password" id="confirm" placeholder="••••••••" />
+      <button id="pwBtn" onclick="resetPassword()">Update Password</button>
+      <div id="pwMsg" class="msg"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script>
+    const { createClient } = supabase;
+    const client = createClient('${supabaseUrl}', '${supabaseKey}');
+
+    let factorId = null;
+    let challengeId = null;
+
+    async function init() {
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+
+      if (!accessToken) {
+        document.getElementById('mfaMsg').innerHTML = '<span class="error">Invalid or expired reset link. Please request a new one.</span>';
+        document.getElementById('mfaBtn').disabled = true;
+        return;
+      }
+
+      await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+
+      // Check if MFA is enrolled
+      const { data: factors } = await client.auth.mfa.listFactors();
+      const totp = factors?.totp?.[0];
+
+      if (totp) {
+        factorId = totp.id;
+        const { data: challenge } = await client.auth.mfa.challenge({ factorId });
+        challengeId = challenge.id;
+      } else {
+        // No MFA — skip straight to password step
+        showPasswordStep();
+      }
+    }
+
+    async function verifyMFA() {
+      const code = document.getElementById('mfaCode').value.trim();
+      const msg = document.getElementById('mfaMsg');
+      const btn = document.getElementById('mfaBtn');
+      if (code.length !== 6) { msg.innerHTML = '<span class="error">Enter the 6-digit code.</span>'; return; }
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+      const { error } = await client.auth.mfa.verify({ factorId, challengeId, code });
+      if (error) {
+        msg.innerHTML = '<span class="error">Invalid code. Please try again.</span>';
+        btn.disabled = false;
+        btn.textContent = 'Verify';
+      } else {
+        showPasswordStep();
+      }
+    }
+
+    function showPasswordStep() {
+      document.getElementById('mfaStep').classList.add('hidden');
+      document.getElementById('passwordStep').classList.remove('hidden');
+    }
+
+    async function resetPassword() {
+      const password = document.getElementById('password').value;
+      const confirm = document.getElementById('confirm').value;
+      const msg = document.getElementById('pwMsg');
+      const btn = document.getElementById('pwBtn');
+      if (password.length < 6) { msg.innerHTML = '<span class="error">Password must be at least 6 characters.</span>'; return; }
+      if (password !== confirm) { msg.innerHTML = '<span class="error">Passwords do not match.</span>'; return; }
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+      const { error } = await client.auth.updateUser({ password });
+      if (error) {
+        msg.innerHTML = '<span class="error">' + error.message + '</span>';
+        btn.disabled = false;
+        btn.textContent = 'Update Password';
+      } else {
+        msg.innerHTML = '<span class="success">Password updated! You can now log in to Pockets.</span>';
+        btn.textContent = 'Done';
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>`);
 });
 
 app.listen(3000, () => {

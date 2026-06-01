@@ -13,6 +13,12 @@ export default function LoginScreen({ onLogin, onSignUp }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // MFA step state
+  const [step, setStep] = useState('auth'); // 'auth' | 'mfa'
+  const [mfaCode, setMfaCode] = useState('');
+  const [factorId, setFactorId] = useState(null);
+  const [challengeId, setChallengeId] = useState(null);
+
   const handleSubmit = async () => {
     if (isSignUp && password !== confirmPassword) {
       Alert.alert('Passwords do not match', 'Please make sure both passwords are the same.');
@@ -35,19 +41,119 @@ export default function LoginScreen({ onLogin, onSignUp }) {
         onSignUp(data.user);
       }
     } else {
-      // Log into an existing account
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-
       if (error) {
         Alert.alert('Login failed', error.message);
       } else {
-        // Existing user — go straight to the main app
-        onLogin();
+        // Check if user has MFA enrolled
+        const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+        if (aalData.nextLevel === 'aal2' && aalData.nextLevel !== aalData.currentLevel) {
+          const { data: factorsData } = await supabase.auth.mfa.listFactors();
+          const totp = factorsData.totp[0];
+          if (totp) {
+            const { data: challenge } = await supabase.auth.mfa.challenge({ factorId: totp.id });
+            setFactorId(totp.id);
+            setChallengeId(challenge.id);
+            setStep('mfa');
+          } else {
+            onLogin();
+          }
+        } else {
+          onLogin();
+        }
       }
     }
 
     setLoading(false);
   };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      Alert.alert('Enter your email', 'Type your email address in the field above first.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: 'http://192.168.2.140:3000/reset-password',
+      });
+      if (error) throw error;
+      Alert.alert('Check your email', `We sent a password reset link to ${email.trim()}.`);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to send reset email.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMFAVerify = async () => {
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.mfa.verify({ factorId, challengeId, code: mfaCode });
+      if (error) throw error;
+      onLogin();
+    } catch (e) {
+      Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
+      setMfaCode('');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (step === 'mfa') {
+    return (
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.inner}>
+          <View style={styles.logoArea}>
+            <View style={styles.logoCircle}>
+              <Text style={styles.logoText}>P</Text>
+            </View>
+            <Text style={styles.appName}>Pockets</Text>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Two-Factor Auth</Text>
+            <Text style={styles.mfaSubtitle}>
+              Open your authenticator app and enter the 6-digit code for Pockets.
+            </Text>
+
+            <TextInput
+              style={styles.codeInput}
+              value={mfaCode}
+              onChangeText={v => setMfaCode(v.replace(/\D/g, '').slice(0, 6))}
+              keyboardType="number-pad"
+              placeholder="000000"
+              placeholderTextColor="#4A5E78"
+              maxLength={6}
+              textAlign="center"
+              autoFocus
+            />
+
+            <TouchableOpacity
+              style={[styles.button, (mfaCode.length !== 6 || loading) && styles.buttonDisabled]}
+              onPress={handleMFAVerify}
+              disabled={mfaCode.length !== 6 || loading}
+              activeOpacity={0.85}
+            >
+              {loading
+                ? <ActivityIndicator color="#0B1120" />
+                : <Text style={styles.buttonText}>Verify</Text>
+              }
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => { setStep('auth'); setMfaCode(''); }} style={styles.switchRow}>
+              <Text style={styles.switchText}>
+                <Text style={styles.switchLink}>← Back to login</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
@@ -139,6 +245,12 @@ export default function LoginScreen({ onLogin, onSignUp }) {
               : <Text style={styles.buttonText}>{isSignUp ? 'Create Account' : 'Log In'}</Text>
             }
           </TouchableOpacity>
+
+          {!isSignUp && (
+            <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotRow}>
+              <Text style={styles.forgotText}>Forgot password?</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity onPress={() => { setIsSignUp(prev => !prev); setConfirmPassword(''); setFullName(''); }} style={styles.switchRow}>
             <Text style={styles.switchText}>
@@ -255,5 +367,29 @@ const styles = StyleSheet.create({
   switchLink: {
     color: '#00D4AA',
     fontWeight: '600',
+  },
+  buttonDisabled: {
+    backgroundColor: '#1C2B45',
+  },
+  forgotRow: { alignItems: 'center', marginTop: 12 },
+  forgotText: { fontSize: 13, color: '#00D4AA', fontWeight: '600' },
+
+  mfaSubtitle: {
+    fontSize: 13,
+    color: '#8899AA',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  codeInput: {
+    backgroundColor: '#1C2B45',
+    borderRadius: 12,
+    paddingVertical: 16,
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    marginBottom: 16,
   },
 });
