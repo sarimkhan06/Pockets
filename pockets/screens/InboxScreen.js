@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 
+import { useFocusEffect } from '@react-navigation/native';
 import { API_URL } from '../lib/config';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatCurrency } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 
-export default function InboxScreen() {
+export default function InboxScreen({ onRefreshInboxCount }) {
   const [items, setItems] = useState([]);
   const [pockets, setPockets] = useState([]);
   const [expandedId, setExpandedId] = useState(null);
@@ -17,33 +18,36 @@ export default function InboxScreen() {
   const [selectedSinglePocket, setSelectedSinglePocket] = useState(null);
   const [customAmounts, setCustomAmounts] = useState({});
 
-  // Fetch unassigned transactions and pockets from the server on load
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const userId = session?.user?.id;
+  // Reload every time the user navigates to this tab
+  useFocusEffect(
+    useCallback(() => {
+      const loadData = async () => {
+        setLoading(true);
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          const userId = session?.user?.id;
 
-        const [inboxRes, pocketsRes] = await Promise.all([
-          fetch(`${API_URL}/transactions/inbox?userId=${userId}`),
-          fetch(`${API_URL}/pockets?userId=${userId}`),
-        ]);
+          const [inboxRes, pocketsRes] = await Promise.all([
+            fetch(`${API_URL}/transactions/inbox?userId=${userId}`),
+            fetch(`${API_URL}/pockets?userId=${userId}`),
+          ]);
 
-        const inboxData = await inboxRes.json();
-        const pocketsData = await pocketsRes.json();
+          const inboxData = await inboxRes.json();
+          const pocketsData = await pocketsRes.json();
 
-        // Add status tracking to each transaction for the UI
-        setItems(inboxData.map(tx => ({ ...tx, status: 'pending', selectedPocket: null })));
-        setPockets(pocketsData);
-      } catch (error) {
-        console.error('Failed to load inbox:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
+          setItems(inboxData.map(tx => ({ ...tx, status: 'pending', selectedPocket: null })));
+          setPockets(pocketsData);
+          onRefreshInboxCount?.(userId);
+        } catch (error) {
+          console.error('Failed to load inbox:', error);
+        } finally {
+          setLoading(false);
+        }
+      };
 
-    loadData();
-  }, []);
+      loadData();
+    }, [])
+  );
 
   useEffect(() => {
     setDistributionMode('method');
@@ -61,6 +65,7 @@ export default function InboxScreen() {
     const userId = session?.user?.id;
     const pocketsRes = await fetch(`${API_URL}/pockets?userId=${userId}`);
     setPockets(await pocketsRes.json());
+    onRefreshInboxCount?.(userId);
   };
 
   const assignPocket = async (item, pocket) => {
@@ -218,7 +223,7 @@ export default function InboxScreen() {
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={[styles.txAmount, { color: isIncome ? '#00D4AA' : '#FF5252' }]}>
-                        {isIncome ? '+' : '-'}${Math.abs(item.amount).toFixed(2)}
+                        {isIncome ? '+' : '-'}${formatCurrency(Math.abs(item.amount))}
                       </Text>
                       {isIncome && (
                         <View style={styles.incomeBadge}>
@@ -275,12 +280,12 @@ export default function InboxScreen() {
                               </Text>
                             ) : (
                               <>
-                                <Text style={styles.pickerLabel}>Split +${item.amount.toFixed(2)} by your method</Text>
+                                <Text style={styles.pickerLabel}>Split +${formatCurrency(item.amount)} by your method</Text>
                                 {methodDist.map(p => (
                                   <View key={p.id} style={styles.pickerRow}>
                                     <View style={[styles.pickerDot, { backgroundColor: p.color }]} />
                                     <Text style={styles.pickerName}>{p.name}</Text>
-                                    <Text style={[styles.pickerLeft, { color: '#00D4AA' }]}>+${p.share.toFixed(2)}</Text>
+                                    <Text style={[styles.pickerLeft, { color: '#00D4AA' }]}>+${formatCurrency(p.share)}</Text>
                                   </View>
                                 ))}
                                 <TouchableOpacity
@@ -300,7 +305,7 @@ export default function InboxScreen() {
 
                           {distributionMode === 'all_in_one' && (
                             <>
-                              <Text style={styles.pickerLabel}>Choose one pocket for the full +${item.amount.toFixed(2)}</Text>
+                              <Text style={styles.pickerLabel}>Choose one pocket for the full +${formatCurrency(item.amount)}</Text>
                               {pockets.map(p => (
                                 <TouchableOpacity
                                   key={p.id}
@@ -352,7 +357,7 @@ export default function InboxScreen() {
                                 </View>
                               ))}
                               <Text style={[styles.customTotal, isCustomValid ? { color: '#00D4AA' } : { color: '#8899AA' }]}>
-                                Total: ${totalCustom.toFixed(2)} / ${item.amount.toFixed(2)}
+                                Total: ${formatCurrency(totalCustom)} / ${formatCurrency(item.amount)}
                               </Text>
                               {isCustomValid && (
                                 <TouchableOpacity
@@ -375,12 +380,12 @@ export default function InboxScreen() {
                         <>
                           <View style={styles.overflowBanner}>
                             <Text style={styles.overflowText}>
-                              {overflowState.primaryPocket.name} can only cover ${(Math.abs(item.amount) - overflowState.overflowAmount).toFixed(2)}.{'\n'}
-                              Pick a pocket for the ${overflowState.overflowAmount.toFixed(2)} overflow:
+                              {overflowState.primaryPocket.name} can only cover ${formatCurrency(Math.abs(item.amount) - overflowState.overflowAmount)}.{'\n'}
+                              Pick a pocket for the ${formatCurrency(overflowState.overflowAmount)} overflow:
                             </Text>
                           </View>
                           {pockets.filter(p => p.id !== overflowState.primaryPocket.id && p.balance >= overflowState.overflowAmount).length === 0 ? (
-                            <Text style={styles.noOverflowText}>No pockets have enough balance to cover the ${overflowState.overflowAmount.toFixed(2)} overflow. Try increasing a pocket's budget.</Text>
+                            <Text style={styles.noOverflowText}>No pockets have enough balance to cover the ${formatCurrency(overflowState.overflowAmount)} overflow. Try increasing a pocket's budget.</Text>
                           ) : (
                             pockets
                               .filter(p => p.id !== overflowState.primaryPocket.id && p.balance >= overflowState.overflowAmount)
@@ -396,7 +401,7 @@ export default function InboxScreen() {
                                   <Text style={styles.pickerName}>{pocket.name}</Text>
                                   {pendingPocketId === pocket.id
                                     ? <ActivityIndicator size="small" color="#00D4AA" />
-                                    : <Text style={styles.pickerLeft}>${pocket.balance.toFixed(2)}</Text>
+                                    : <Text style={styles.pickerLeft}>${formatCurrency(pocket.balance)}</Text>
                                   }
                                 </TouchableOpacity>
                               ))
@@ -418,7 +423,7 @@ export default function InboxScreen() {
                               <Text style={styles.pickerName}>{pocket.name}</Text>
                               {pendingPocketId === pocket.id
                                 ? <ActivityIndicator size="small" color="#00D4AA" />
-                                : <Text style={styles.pickerLeft}>${pocket.balance.toFixed(2)}</Text>
+                                : <Text style={styles.pickerLeft}>${formatCurrency(pocket.balance)}</Text>
                               }
                             </TouchableOpacity>
                           ))}
@@ -453,7 +458,7 @@ export default function InboxScreen() {
                     </View>
                   </View>
                   <Text style={[styles.txAmount, { color: item.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
-                    {item.amount < 0 ? '-' : '+'}${Math.abs(item.amount).toFixed(2)}
+                    {item.amount < 0 ? '-' : '+'}${formatCurrency(Math.abs(item.amount))}
                   </Text>
                 </View>
               </View>

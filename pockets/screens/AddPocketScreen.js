@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Switch,
   StyleSheet, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert,
@@ -6,6 +6,7 @@ import {
 
 import { API_URL } from '../lib/config';
 import { supabase } from '../lib/supabase';
+import { formatCurrency } from '../lib/utils';
 
 const COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
@@ -16,21 +17,48 @@ export default function AddPocketScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [includeInDist, setIncludeInDist] = useState(false);
   const [incomePercent, setIncomePercent] = useState('');
+  const [pockets, setPockets] = useState([]);
+  const [sourceAmounts, setSourceAmounts] = useState({});
+
+  useEffect(() => {
+    const loadPockets = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${API_URL}/pockets?userId=${session?.user?.id}`);
+      const data = await res.json();
+      setPockets(Array.isArray(data) ? data : []);
+    };
+    loadPockets();
+  }, []);
+
+  const parsedBalance = parseFloat(balance) || 0;
+  const needsSource = parsedBalance > 0;
+  const fundablePockets = pockets.filter(p => p.balance > 0);
+  const totalFunded = Object.values(sourceAmounts).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+  const isFundingComplete = !needsSource || Math.abs(totalFunded - parsedBalance) < 0.01;
+
+  const handleBalanceChange = (val) => {
+    setBalance(val);
+    setSourceAmounts({});
+  };
 
   const handleSave = async () => {
     setLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
+      const sources = Object.entries(sourceAmounts)
+        .filter(([, v]) => parseFloat(v) > 0)
+        .map(([pocketId, v]) => ({ pocketId, amount: parseFloat(v) }));
       const res = await fetch(`${API_URL}/pockets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          balance: parseFloat(balance),
+          balance: parsedBalance,
           color: selectedColor,
           income_percent: includeInDist ? (parseFloat(incomePercent) || null) : null,
           userId,
+          sources: needsSource ? sources : undefined,
         }),
       });
       const data = await res.json();
@@ -45,6 +73,8 @@ export default function AddPocketScreen({ navigation }) {
       setLoading(false);
     }
   };
+
+  const canSave = name.trim().length > 0 && isFundingComplete && !loading;
 
   return (
     <KeyboardAvoidingView
@@ -96,10 +126,54 @@ export default function AddPocketScreen({ navigation }) {
                 placeholderTextColor="#4A5E78"
                 keyboardType="numeric"
                 value={balance}
-                onChangeText={setBalance}
+                onChangeText={handleBalanceChange}
               />
             </View>
           </View>
+
+          {/* Fund from — only shown when balance > 0 */}
+          {needsSource && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Fund from</Text>
+              {fundablePockets.length === 0 ? (
+                <View style={styles.noFundCard}>
+                  <Text style={styles.noFundText}>
+                    No pockets have funds available. Add money to an existing pocket first.
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {fundablePockets.map(p => (
+                    <View key={p.id} style={styles.pocketOption}>
+                      <View style={[styles.pocketDot, { backgroundColor: p.color }]} />
+                      <Text style={styles.pocketOptionName}>{p.name}</Text>
+                      <Text style={styles.pocketOptionBalance}>${formatCurrency(p.balance)}</Text>
+                      <View style={styles.sourceInputWrap}>
+                        <Text style={styles.sourceInputSign}>$</Text>
+                        <TextInput
+                          style={styles.sourceInput}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor="#4A5E78"
+                          value={sourceAmounts[p.id] || ''}
+                          onChangeText={v => setSourceAmounts(prev => ({ ...prev, [p.id]: v }))}
+                        />
+                      </View>
+                    </View>
+                  ))}
+                  <Text style={[
+                    styles.fundingTotal,
+                    isFundingComplete ? styles.fundingTotalComplete : styles.fundingTotalIncomplete,
+                  ]}>
+                    {isFundingComplete
+                      ? `Fully funded — $${formatCurrency(parsedBalance)}`
+                      : `$${formatCurrency(totalFunded)} of $${formatCurrency(parsedBalance)} allocated`
+                    }
+                  </Text>
+                </>
+              )}
+            </View>
+          )}
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Color</Text>
@@ -143,9 +217,9 @@ export default function AddPocketScreen({ navigation }) {
         </View>
 
         <TouchableOpacity
-          style={[styles.saveBtn, (!name || !balance || loading) && styles.saveBtnDisabled]}
+          style={[styles.saveBtn, !canSave && styles.saveBtnDisabled]}
           onPress={handleSave}
-          disabled={!name || !balance || loading}
+          disabled={!canSave}
           activeOpacity={0.85}
         >
           {loading
@@ -197,6 +271,33 @@ const styles = StyleSheet.create({
   amountRow: { flexDirection: 'row', alignItems: 'center' },
   dollarSign: { fontSize: 20, color: '#8899AA', marginRight: 8 },
   amountInput: { flex: 1 },
+
+  noFundCard: {
+    backgroundColor: '#151F32', borderRadius: 12,
+    padding: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
+  noFundText: { fontSize: 13, color: '#4A5E78', lineHeight: 20 },
+
+  pocketOption: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#151F32', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 8,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
+  pocketDot: { width: 10, height: 10, borderRadius: 5, marginRight: 12 },
+  pocketOptionName: { flex: 1, fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
+  pocketOptionBalance: { fontSize: 12, color: '#4A5E78', marginRight: 12 },
+  sourceInputWrap: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sourceInputSign: { fontSize: 14, color: '#8899AA' },
+  sourceInput: {
+    backgroundColor: '#1C2B45', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    fontSize: 14, color: '#FFFFFF', width: 72, textAlign: 'right',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+  },
+  fundingTotal: { fontSize: 13, fontWeight: '600', textAlign: 'right', marginTop: 4 },
+  fundingTotalComplete: { color: '#00D4AA' },
+  fundingTotalIncomplete: { color: '#8899AA' },
 
   colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   colorDot: { width: 36, height: 36, borderRadius: 18 },

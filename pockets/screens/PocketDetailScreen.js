@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { useFocusEffect } from '@react-navigation/native';
 
 import { API_URL } from '../lib/config';
-import { formatDate } from '../lib/utils';
+import { formatDate, formatCurrency } from '../lib/utils';
 
 export default function PocketDetailScreen({ route, navigation }) {
   const { pocket } = route.params;
@@ -52,7 +52,7 @@ export default function PocketDetailScreen({ route, navigation }) {
         <View style={[styles.summaryCard, { borderTopColor: pocket.color }]}>
           <Text style={styles.summaryLabel}>Available</Text>
           <Text style={[styles.summaryAmount, pocket.balance <= 0 && styles.summaryDepleted]}>
-            ${pocket.balance.toFixed(2)}
+            ${formatCurrency(pocket.balance)}
           </Text>
         </View>
 
@@ -89,7 +89,7 @@ export default function PocketDetailScreen({ route, navigation }) {
                   <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
                 </View>
                 <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
-                  {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
+                  {tx.amount < 0 ? '-' : '+'}${formatCurrency(Math.abs(tx.amount))}
                 </Text>
               </View>
             ))}

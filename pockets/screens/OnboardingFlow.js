@@ -3,9 +3,11 @@ import {
   View, Text, TouchableOpacity, StyleSheet, Alert,
   ScrollView, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator,
 } from 'react-native';
+import { create, open } from 'react-native-plaid-link-sdk';
 import { supabase } from '../lib/supabase';
 import { API_URL } from '../lib/config';
 import { TEMPLATES } from '../data/onboardingData';
+import { formatCurrency } from '../lib/utils';
 
 // ─── Step 1: Monthly income ───────────────────────────────────────────────────
 
@@ -55,7 +57,7 @@ function IncomeStep({ onNext }) {
 
 // ─── Step 2: Template selection ───────────────────────────────────────────────
 
-function TemplateStep({ onComplete, signUpUser, isRetake }) {
+function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
   const [selected, setSelected] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -82,7 +84,11 @@ function TemplateStep({ onComplete, signUpUser, isRetake }) {
       await fetch(`${API_URL}/user-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, methodId: selected.id }),
+        body: JSON.stringify({
+          userId,
+          methodId: selected.id,
+          previousMethodId: isRetake ? currentMethodId : undefined,
+        }),
       });
 
       const pockets = selected.pockets().map(p => ({
@@ -97,6 +103,16 @@ function TemplateStep({ onComplete, signUpUser, isRetake }) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ pockets }),
         });
+      }
+
+      if (isRetake) {
+        try {
+          await fetch(`${API_URL}/plaid/initialize-pocket-balances`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId }),
+          });
+        } catch (e) {}
       }
 
       onComplete({ method: selected });
@@ -180,21 +196,349 @@ function TemplateStep({ onComplete, signUpUser, isRetake }) {
   );
 }
 
+// ─── Step 3: Connect bank ─────────────────────────────────────────────────────
+
+function ConnectBankStep({ signUpUser, onComplete }) {
+  const [connecting, setConnecting] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [bankBalance, setBankBalance] = useState(0);
+
+  const getUserId = async () => {
+    if (signUpUser?.id) return signUpUser.id;
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.user?.id;
+  };
+
+  const syncTransactions = async (userId) => {
+    setSyncing(true);
+    try {
+      await fetch(`${API_URL}/plaid/sync-transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+    } catch (e) {
+      // Non-fatal — user can sync manually from Settings
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      const userId = await getUserId();
+      const res = await fetch(`${API_URL}/plaid/create-link-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const { link_token, error } = await res.json();
+      if (error) throw new Error(error);
+
+      create({ token: link_token });
+      open({
+        onSuccess: async (success) => {
+          try {
+            const exchangeRes = await fetch(`${API_URL}/plaid/exchange-token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ publicToken: success.publicToken, userId }),
+            });
+            const exchangeData = await exchangeRes.json();
+            if (exchangeData.error) throw new Error(exchangeData.error);
+
+            // Fill pockets with the user's real bank balance before syncing transactions
+            const initRes = await fetch(`${API_URL}/plaid/initialize-pocket-balances`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId }),
+            });
+            const initData = await initRes.json();
+            if (initData.error) throw new Error(initData.error);
+
+            setBankBalance(initData.totalBalance || 0);
+            setConnected(true);
+            await syncTransactions(userId);
+          } catch (e) {
+            Alert.alert('Error', e.message || 'Failed to save bank connection');
+          } finally {
+            setConnecting(false);
+          }
+        },
+        onExit: (exit) => {
+          if (exit.error) {
+            Alert.alert('Error', exit.error.display_message || 'Something went wrong with Plaid');
+          }
+          setConnecting(false);
+        },
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to start bank connection');
+      setConnecting(false);
+    }
+  };
+
+  const features = [
+    { icon: '⚡', title: 'Real transactions', desc: 'Transactions appear in your inbox to assign to pockets.' },
+    { icon: '🔒', title: 'Bank-level security', desc: 'Plaid is trusted by thousands of apps and millions of users.' },
+    { icon: '👁', title: 'Read-only access', desc: 'We can only read your transactions — we cannot move money.' },
+  ];
+
+  return (
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+      <View style={styles.topSection}>
+        <Text style={styles.stepLabel}>Last step</Text>
+        <Text style={styles.title}>Connect your bank</Text>
+        <Text style={styles.subtitle}>
+          Link your bank so your real transactions flow into your pockets automatically.
+        </Text>
+      </View>
+
+      <View style={styles.bankHero}>
+        <View style={[styles.bankIcon, connected && styles.bankIconConnected]}>
+          <Text style={styles.bankEmoji}>{connected ? '✓' : '🏦'}</Text>
+        </View>
+        {connected && (
+          <Text style={styles.bankConnectedLabel}>
+            {syncing ? 'Syncing your transactions…' : 'Bank connected!'}
+          </Text>
+        )}
+      </View>
+
+      {!connected && (
+        <View style={styles.featuresCard}>
+          {features.map((f, i) => (
+            <View key={i} style={[styles.featureRow, i < 2 && styles.featureBorder]}>
+              <Text style={styles.featureIcon}>{f.icon}</Text>
+              <View style={styles.featureText}>
+                <Text style={styles.featureTitle}>{f.title}</Text>
+                <Text style={styles.featureDesc}>{f.desc}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <View style={styles.bankFooter}>
+        {connected ? (
+          <TouchableOpacity
+            style={[styles.btn, styles.bankContinueBtn, syncing && styles.btnDisabled]}
+            onPress={() => onComplete(bankBalance)}
+            disabled={syncing}
+            activeOpacity={0.85}
+          >
+            {syncing
+              ? <ActivityIndicator color="#0B1120" />
+              : <Text style={styles.btnText}>Go to my pockets →</Text>
+            }
+          </TouchableOpacity>
+        ) : (
+          <>
+            <TouchableOpacity
+              style={[styles.btn, styles.bankContinueBtn, connecting && styles.btnDisabled]}
+              onPress={handleConnect}
+              disabled={connecting}
+              activeOpacity={0.85}
+            >
+              {connecting
+                ? <ActivityIndicator color="#0B1120" />
+                : <Text style={styles.btnText}>Connect with Plaid</Text>
+              }
+            </TouchableOpacity>
+          </>
+        )}
+      </View>
+
+      <View style={{ height: 40 }} />
+    </ScrollView>
+  );
+}
+
+// ─── Step 4: Set up custom pockets (blank template only) ─────────────────────
+
+const POCKET_COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
+
+function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
+  const [rows, setRows] = useState([
+    { id: 1, name: '', amount: '', color: POCKET_COLORS[0] },
+  ]);
+  const [saving, setSaving] = useState(false);
+
+  const totalAllocated = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+  const remaining = Math.round((bankBalance - totalAllocated) * 100) / 100;
+
+  const addRow = () => {
+    const color = POCKET_COLORS[rows.length % POCKET_COLORS.length];
+    setRows(prev => [...prev, { id: Date.now(), name: '', amount: '', color }]);
+  };
+
+  const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
+
+  const updateRow = (id, field, value) => {
+    if (field === 'amount') {
+      const otherTotal = rows.reduce((sum, r) => r.id !== id ? sum + (parseFloat(r.amount) || 0) : sum, 0);
+      const max = Math.max(0, bankBalance - otherTotal);
+      const parsed = parseFloat(value) || 0;
+      if (parsed > max) value = String(Math.round(max * 100) / 100);
+    }
+    setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+  };
+
+  const handleDone = async () => {
+    const valid = rows.filter(r => r.name.trim() && parseFloat(r.amount) > 0);
+    if (valid.length === 0) {
+      Alert.alert('Add at least one pocket', 'Give it a name and an amount.');
+      return;
+    }
+    setSaving(true);
+    try {
+      let userId = signUpUser?.id;
+      if (!userId) {
+        const { data: { session } } = await supabase.auth.getSession();
+        userId = session?.user?.id;
+      }
+      await fetch(`${API_URL}/pockets/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pockets: valid.map(r => ({
+            name: r.name.trim(),
+            balance: parseFloat(r.amount),
+            color: r.color,
+            income_percent: null,
+            user_id: userId,
+          })),
+        }),
+      });
+      onComplete();
+    } catch (e) {
+      Alert.alert('Error', 'Failed to create pockets. Please try again.');
+      setSaving(false);
+    }
+  };
+
+  const canDone = remaining === 0 && rows.some(r => r.name.trim() && parseFloat(r.amount) > 0) && !saving;
+
+  return (
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <View style={styles.topSection}>
+        <Text style={styles.stepLabel}>Last step</Text>
+        <Text style={styles.title}>Set up your pockets</Text>
+        <Text style={styles.subtitle}>
+          Divide your ${formatCurrency(bankBalance)} bank balance across your spending categories.
+        </Text>
+      </View>
+
+      <View style={styles.remainingCard}>
+        <Text style={styles.remainingLabel}>Remaining to allocate</Text>
+        <Text style={styles.remainingAmount}>
+          ${formatCurrency(remaining)}
+        </Text>
+      </View>
+
+      <View style={styles.setupList}>
+        {rows.map((r) => (
+          <View key={r.id} style={styles.setupRow}>
+            <View style={[styles.setupDot, { backgroundColor: r.color }]} />
+            <TextInput
+              style={styles.setupName}
+              placeholder="Pocket name"
+              placeholderTextColor="#4A5E78"
+              value={r.name}
+              onChangeText={v => updateRow(r.id, 'name', v)}
+            />
+            <Text style={styles.setupSign}>$</Text>
+            <TextInput
+              style={styles.setupAmount}
+              placeholder="0"
+              placeholderTextColor="#4A5E78"
+              keyboardType="numeric"
+              value={r.amount}
+              onChangeText={v => updateRow(r.id, 'amount', v)}
+            />
+            {rows.length > 1 && (
+              <TouchableOpacity onPress={() => removeRow(r.id)} style={styles.setupRemove}>
+                <Text style={styles.setupRemoveText}>×</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ))}
+      </View>
+
+      <TouchableOpacity style={styles.addRowBtn} onPress={addRow} activeOpacity={0.7}>
+        <Text style={styles.addRowBtnText}>+ Add another pocket</Text>
+      </TouchableOpacity>
+
+      <View style={[styles.bankFooter, { marginTop: 24 }]}>
+        <TouchableOpacity
+          style={[styles.btn, styles.bankContinueBtn, !canDone && styles.btnDisabled]}
+          onPress={handleDone}
+          disabled={!canDone}
+          activeOpacity={0.85}
+        >
+          {saving
+            ? <ActivityIndicator color="#0B1120" />
+            : <Text style={styles.btnText}>Done →</Text>
+          }
+        </TouchableOpacity>
+      </View>
+
+      <View style={{ height: 40 }} />
+    </ScrollView>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function OnboardingFlow({ onComplete, signUpUser, isRetake, onCancel }) {
-  let content = (
-    <TemplateStep
-      onComplete={onComplete}
-      signUpUser={signUpUser}
-      isRetake={isRetake}
-    />
-  );
+export default function OnboardingFlow({ onComplete, signUpUser, isRetake, currentMethodId, onCancel }) {
+  const [step, setStep] = useState('template'); // 'template' | 'bank' | 'setup'
+  const [selectedMethod, setSelectedMethod] = useState(null);
+  const [bankBalance, setBankBalance] = useState(0);
+
+  const handleTemplateComplete = ({ method }) => {
+    setSelectedMethod(method);
+    if (isRetake) {
+      onComplete({ method });
+    } else {
+      setStep('bank');
+    }
+  };
+
+  const handleBankComplete = (balance) => {
+    if (selectedMethod?.id === 'blank' && balance > 0) {
+      setBankBalance(balance);
+      setStep('setup');
+    } else {
+      onComplete({ method: selectedMethod });
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0B1120' }}>
-      {content}
-      {onCancel && (
+      {step === 'template' && (
+        <TemplateStep
+          onComplete={handleTemplateComplete}
+          signUpUser={signUpUser}
+          isRetake={isRetake}
+          currentMethodId={currentMethodId}
+        />
+      )}
+      {step === 'bank' && (
+        <ConnectBankStep
+          signUpUser={signUpUser}
+          onComplete={handleBankComplete}
+        />
+      )}
+      {step === 'setup' && (
+        <SetupPocketsStep
+          bankBalance={bankBalance}
+          signUpUser={signUpUser}
+          onComplete={() => onComplete({ method: selectedMethod })}
+        />
+      )}
+      {onCancel && step === 'template' && (
         <TouchableOpacity style={styles.cancelBtn} onPress={onCancel} activeOpacity={0.7}>
           <Text style={styles.cancelBtnText}>✕</Text>
         </TouchableOpacity>
@@ -268,4 +612,66 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
   },
   cancelBtnText: { fontSize: 14, color: '#8899AA', fontWeight: '600' },
+
+  // ConnectBankStep styles
+  bankHero: { alignItems: 'center', paddingVertical: 24 },
+  bankIcon: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: '#151F32', alignItems: 'center', justifyContent: 'center',
+    marginBottom: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
+  bankIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' },
+  bankEmoji: { fontSize: 36 },
+  bankConnectedLabel: { fontSize: 16, fontWeight: '700', color: '#00D4AA' },
+
+  featuresCard: {
+    marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 24, overflow: 'hidden',
+  },
+  featureRow: { flexDirection: 'row', alignItems: 'flex-start', padding: 16 },
+  featureBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  featureIcon: { fontSize: 22, marginRight: 14, marginTop: 2 },
+  featureText: { flex: 1 },
+  featureTitle: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', marginBottom: 3 },
+  featureDesc: { fontSize: 13, color: '#8899AA', lineHeight: 18 },
+
+  bankFooter: { paddingHorizontal: 24 },
+  bankContinueBtn: { marginBottom: 0 },
+  skipBtn: { paddingVertical: 16, alignItems: 'center' },
+  skipText: { fontSize: 14, color: '#4A5E78', fontWeight: '500' },
+
+  // SetupPocketsStep styles
+  remainingCard: {
+    marginHorizontal: 24, backgroundColor: '#151F32', borderRadius: 16,
+    padding: 18, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    alignItems: 'center',
+  },
+  remainingLabel: { fontSize: 12, color: '#8899AA', fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+  remainingAmount: { fontSize: 32, fontWeight: '800', color: '#00D4AA', letterSpacing: -0.5 },
+  remainingOver: { color: '#FF5252' },
+
+  setupList: { paddingHorizontal: 20, gap: 10 },
+  setupRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#151F32', borderRadius: 14,
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', gap: 10,
+  },
+  setupDot: { width: 12, height: 12, borderRadius: 6 },
+  setupName: {
+    flex: 1, fontSize: 14, color: '#FFFFFF',
+    paddingVertical: 2,
+  },
+  setupSign: { fontSize: 14, color: '#8899AA' },
+  setupAmount: {
+    width: 80, fontSize: 14, color: '#FFFFFF', textAlign: 'right',
+    backgroundColor: '#1C2B45', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
+  },
+  setupRemove: { paddingLeft: 4 },
+  setupRemoveText: { fontSize: 20, color: '#4A5E78', lineHeight: 22 },
+
+  addRowBtn: { marginHorizontal: 20, marginTop: 12, paddingVertical: 12, alignItems: 'center' },
+  addRowBtnText: { fontSize: 14, color: '#00D4AA', fontWeight: '600' },
 });

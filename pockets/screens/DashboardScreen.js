@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, Activ
 import { useFocusEffect } from '@react-navigation/native';
 
 import { API_URL } from '../lib/config';
-import { formatDate, sortTxNewestFirst } from '../lib/utils';
+import { formatDate, sortTxNewestFirst, formatCurrency } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 
 const { width } = Dimensions.get('window');
@@ -79,7 +79,7 @@ export default function DashboardScreen({ navigation }) {
         {/* Balance Card */}
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Total Balance</Text>
-          <Text style={styles.balanceAmount}>${totalBalance.toFixed(2)}</Text>
+          <Text style={styles.balanceAmount}>${formatCurrency(totalBalance)}</Text>
           <Text style={styles.balanceNote}>
             across {pockets.length} pocket{pockets.length !== 1 ? 's' : ''}
           </Text>
@@ -93,23 +93,35 @@ export default function DashboardScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.grid}>
-          {pockets.map(pocket => (
-            <TouchableOpacity
-              key={pocket.id}
-              style={styles.card}
-              activeOpacity={0.8}
-              onPress={() => navigation.navigate('PocketDetail', { pocket })}
-            >
-              <View style={[styles.cardTopBar, { backgroundColor: pocket.color }]} />
-              <Text style={styles.cardName}>{pocket.name}</Text>
-              <Text style={[styles.cardBalance, pocket.balance <= 0 && styles.cardDepleted]}>
-                ${pocket.balance.toFixed(2)}
-              </Text>
-              <Text style={styles.cardBalanceLabel}>available</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {pockets.length === 0 ? (
+          <TouchableOpacity
+            style={styles.emptyPockets}
+            onPress={() => navigation.navigate('AddPocket')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.emptyPocketsPlus}>+</Text>
+            <Text style={styles.emptyPocketsTitle}>Create your first pocket</Text>
+            <Text style={styles.emptyPocketsSub}>Tap to add a spending envelope</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.grid}>
+            {pockets.map(pocket => (
+              <TouchableOpacity
+                key={pocket.id}
+                style={styles.card}
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate('PocketDetail', { pocket })}
+              >
+                <View style={[styles.cardTopBar, { backgroundColor: pocket.color }]} />
+                <Text style={styles.cardName}>{pocket.name}</Text>
+                <Text style={[styles.cardBalance, pocket.balance <= 0 && styles.cardDepleted]}>
+                  ${formatCurrency(pocket.balance)}
+                </Text>
+                <Text style={styles.cardBalanceLabel}>available</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {/* Recent Transactions */}
         <View style={styles.sectionHeader}>
@@ -133,7 +145,7 @@ export default function DashboardScreen({ navigation }) {
                 <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
               </View>
               <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
-                {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
+                {tx.amount < 0 ? '-' : '+'}${formatCurrency(Math.abs(tx.amount))}
               </Text>
             </View>
           ))}
@@ -209,6 +221,15 @@ const styles = StyleSheet.create({
   },
   cardDepleted: { color: '#FF5252' },
   cardBalanceLabel: { fontSize: 11, color: '#4A5E78', paddingHorizontal: 14, paddingBottom: 14 },
+
+  emptyPockets: {
+    marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,
+    borderWidth: 1.5, borderColor: '#00D4AA', borderStyle: 'dashed',
+    paddingVertical: 36, alignItems: 'center', marginBottom: 12,
+  },
+  emptyPocketsPlus: { fontSize: 32, color: '#00D4AA', fontWeight: '300', marginBottom: 10 },
+  emptyPocketsTitle: { fontSize: 15, fontWeight: '700', color: '#FFFFFF', marginBottom: 4 },
+  emptyPocketsSub: { fontSize: 13, color: '#4A5E78' },
 
   txCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,

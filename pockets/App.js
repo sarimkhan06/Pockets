@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { StyleSheet, Platform, StatusBar, ActivityIndicator, View } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { StyleSheet, Platform, StatusBar, ActivityIndicator, View, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from './lib/supabase';
@@ -15,6 +15,38 @@ export default function App() {
   const [currentMethod, setCurrentMethod] = useState(null);
   const [signUpUser, setSignUpUser] = useState(null);
   const [isRetake, setIsRetake] = useState(false);
+  const [inboxCount, setInboxCount] = useState(0);
+
+  const refreshInboxCount = useCallback(async (userId) => {
+    try {
+      const res = await fetch(`${API_URL}/transactions/inbox?userId=${userId}`);
+      const data = await res.json();
+      setInboxCount(Array.isArray(data) ? data.length : 0);
+    } catch (e) {}
+  }, []);
+
+  const syncAndNotify = useCallback(async (userId) => {
+    try {
+      await fetch(`${API_URL}/plaid/sync-transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+    } catch (e) {}
+    try {
+      const res = await fetch(`${API_URL}/transactions/inbox?userId=${userId}`);
+      const data = await res.json();
+      const count = Array.isArray(data) ? data.length : 0;
+      setInboxCount(count);
+      if (count > 0) {
+        Alert.alert(
+          'Transactions to review',
+          `You have ${count} unassigned transaction${count !== 1 ? 's' : ''} in your inbox.`,
+          [{ text: 'OK' }],
+        );
+      }
+    } catch (e) {}
+  }, []);
 
   useEffect(() => {
     // Check if the user already has an active session when the app opens
@@ -33,6 +65,7 @@ export default function App() {
         console.error('Failed to fetch user settings:', e);
       }
       setScreen('main');
+      syncAndNotify(session.user.id);
     });
 
     // Listen for auth changes — only send to login on explicit sign-out
@@ -49,7 +82,11 @@ export default function App() {
   const handleOnboardingComplete = ({ method }) => {
     setCurrentMethod(method);
     setIsRetake(false);
+    setUserName(signUpUser?.user_metadata?.full_name || '');
     setScreen('main');
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.id) refreshInboxCount(session.user.id);
+    });
   };
 
   // Show a spinner while we check for an existing session
@@ -68,7 +105,12 @@ export default function App() {
 
         {screen === 'login' && (
           <LoginScreen
-            onLogin={() => setScreen('main')}
+            onLogin={async () => {
+              const { data: { session } } = await supabase.auth.getSession();
+              setUserName(session?.user?.user_metadata?.full_name || '');
+              setScreen('main');
+              if (session?.user?.id) syncAndNotify(session.user.id);
+            }}
             onSignUp={(user) => { setSignUpUser(user); setScreen('onboarding'); }}
           />
         )}
@@ -78,6 +120,7 @@ export default function App() {
             onComplete={handleOnboardingComplete}
             signUpUser={signUpUser}
             isRetake={isRetake}
+            currentMethodId={isRetake ? currentMethod?.id : undefined}
             onCancel={isRetake ? () => { setIsRetake(false); setScreen('main'); } : null}
           />
         )}
@@ -89,6 +132,11 @@ export default function App() {
               onRetakeQuiz={() => { setIsRetake(true); setScreen('onboarding'); }}
               userName={userName}
               currentMethod={currentMethod}
+              inboxCount={inboxCount}
+              onRefreshInboxCount={refreshInboxCount}
+              onRestoreComplete={(methodId) => {
+                if (methodId && TEMPLATES[methodId]) setCurrentMethod(TEMPLATES[methodId]);
+              }}
             />
           </NavigationContainer>
         )}

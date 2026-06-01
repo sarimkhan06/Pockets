@@ -15,18 +15,20 @@ import SwitchMethodScreen from '../screens/SwitchMethodScreen';
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-function HomeStack() {
+function HomeStack({ onRefreshInboxCount }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Dashboard" component={DashboardScreen} />
       <Stack.Screen name="PocketDetail" component={PocketDetailScreen} />
       <Stack.Screen name="AddPocket" component={AddPocketScreen} />
-      <Stack.Screen name="EditPocket" component={EditPocketScreen} />
+      <Stack.Screen name="EditPocket">
+        {(props) => <EditPocketScreen {...props} onRefreshInboxCount={onRefreshInboxCount} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
 
-function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod }) {
+function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod, onRestoreComplete }) {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="SettingsMain">
@@ -37,6 +39,7 @@ function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod }) {
             onRetakeQuiz={onRetakeQuiz}
             userName={userName}
             currentMethod={currentMethod}
+            onRestoreComplete={onRestoreComplete}
           />
         )}
       </Stack.Screen>
@@ -50,7 +53,7 @@ function SettingsStack({ onLogout, onRetakeQuiz, userName, currentMethod }) {
   );
 }
 
-export default function MainNavigator({ onLogout, onRetakeQuiz, userName, currentMethod }) {
+export default function MainNavigator({ onLogout, onRetakeQuiz, userName, currentMethod, inboxCount, onRefreshInboxCount, onRestoreComplete }) {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -69,14 +72,20 @@ export default function MainNavigator({ onLogout, onRetakeQuiz, userName, curren
     >
       <Tab.Screen
         name="Home"
-        component={HomeStack}
         options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🏠</Text> }}
-      />
+      >
+        {() => <HomeStack onRefreshInboxCount={onRefreshInboxCount} />}
+      </Tab.Screen>
       <Tab.Screen
         name="Inbox"
-        component={InboxScreen}
-        options={{ tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text> }}
-      />
+        options={{
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text>,
+          tabBarBadge: inboxCount > 0 ? inboxCount : undefined,
+          tabBarBadgeStyle: { backgroundColor: '#FF5252', fontSize: 11, fontWeight: '700' },
+        }}
+      >
+        {(props) => <InboxScreen {...props} onRefreshInboxCount={onRefreshInboxCount} />}
+      </Tab.Screen>
       <Tab.Screen
         name="Transactions"
         component={TransactionsScreen}
@@ -92,6 +101,7 @@ export default function MainNavigator({ onLogout, onRetakeQuiz, userName, curren
             onRetakeQuiz={onRetakeQuiz}
             userName={userName}
             currentMethod={currentMethod}
+            onRestoreComplete={onRestoreComplete}
           />
         )}
       </Tab.Screen>

@@ -3,7 +3,7 @@ import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-nat
 import { useFocusEffect } from '@react-navigation/native';
 
 import { API_URL } from '../lib/config';
-import { formatDate, sortTxNewestFirst } from '../lib/utils';
+import { formatDate, sortTxNewestFirst, formatCurrency } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 
 export default function TransactionsScreen() {
@@ -85,7 +85,7 @@ export default function TransactionsScreen() {
                     </View>
                   </View>
                   <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
-                    {tx.amount < 0 ? '-' : '+'}${Math.abs(tx.amount).toFixed(2)}
+                    {tx.amount < 0 ? '-' : '+'}${formatCurrency(Math.abs(tx.amount))}
                   </Text>
                 </View>
               );

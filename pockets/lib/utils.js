@@ -21,6 +21,10 @@ export function formatDate(dateStr) {
   return dateStr;
 }
 
+export function formatCurrency(amount) {
+  return amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 // Sorts an array of transaction objects newest-first using their date field
 export function sortTxNewestFirst(txList) {
   return [...txList].sort((a, b) => {

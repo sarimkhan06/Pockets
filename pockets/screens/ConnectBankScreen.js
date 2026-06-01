@@ -1,6 +1,105 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { create, open } from 'react-native-plaid-link-sdk';
+import { supabase } from '../lib/supabase';
+import { API_URL } from '../lib/config';
 
 export default function ConnectBankScreen({ navigation }) {
+  const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkStatus();
+  }, []);
+
+  const getUserId = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.user?.id;
+  };
+
+  const checkStatus = async () => {
+    try {
+      const userId = await getUserId();
+      const res = await fetch(`${API_URL}/plaid/status?userId=${userId}`);
+      const data = await res.json();
+      setConnected(data.connected);
+    } catch (e) {
+      console.error('Failed to check Plaid status:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      const userId = await getUserId();
+
+      // Step 1: get a link token from our server
+      const res = await fetch(`${API_URL}/plaid/create-link-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const { link_token, error } = await res.json();
+      if (error) throw new Error(error);
+
+      // Step 2: create initializes Plaid with the token, open launches the UI
+      create({ token: link_token });
+
+      open({
+        onSuccess: async (success) => {
+          try {
+            // Step 3: exchange the public token for a permanent access token
+            const exchangeRes = await fetch(`${API_URL}/plaid/exchange-token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ publicToken: success.publicToken, userId }),
+            });
+            const exchangeData = await exchangeRes.json();
+            if (exchangeData.error) throw new Error(exchangeData.error);
+            setConnected(true);
+            Alert.alert('Bank connected!', 'Tap "Sync Transactions" to pull in your latest transactions.');
+          } catch (e) {
+            Alert.alert('Error', e.message || 'Failed to save bank connection');
+          } finally {
+            setConnecting(false);
+          }
+        },
+        onExit: (exit) => {
+          if (exit.error) {
+            Alert.alert('Error', exit.error.display_message || 'Something went wrong with Plaid');
+          }
+          setConnecting(false);
+        },
+      });
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to start bank connection');
+      setConnecting(false);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const userId = await getUserId();
+      const res = await fetch(`${API_URL}/plaid/sync-transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      Alert.alert('Synced!', `${data.count} transaction${data.count !== 1 ? 's' : ''} added to your inbox.`);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to sync transactions');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -13,41 +112,74 @@ export default function ConnectBankScreen({ navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.hero}>
-          <View style={styles.heroIcon}>
-            <Text style={styles.heroEmoji}>🏦</Text>
+          <View style={[styles.heroIcon, connected && styles.heroIconConnected]}>
+            <Text style={styles.heroEmoji}>{connected ? '✓' : '🏦'}</Text>
           </View>
-          <Text style={styles.heroTitle}>Connect your bank account</Text>
+          <Text style={styles.heroTitle}>
+            {connected ? 'Bank connected' : 'Connect your bank'}
+          </Text>
           <Text style={styles.heroSubtitle}>
-            Pockets uses Plaid to securely connect to your bank. Your login credentials are
-            never stored by us.
+            {connected
+              ? 'Your bank account is linked. Sync anytime to pull in your latest transactions.'
+              : 'Pockets uses Plaid to securely connect to your bank. Your login credentials are never stored by us.'
+            }
           </Text>
         </View>
 
-        <View style={styles.featuresCard}>
-          {[
-            { icon: '⚡', title: 'Live transactions', desc: 'New transactions appear in your inbox automatically.' },
-            { icon: '🔒', title: 'Bank-level security', desc: 'Plaid is trusted by thousands of apps and millions of users.' },
-            { icon: '👁', title: 'Read-only access', desc: 'We can only read your transactions — we cannot move money.' },
-          ].map((f, i) => (
-            <View key={i} style={[styles.featureRow, i < 2 && styles.featureBorder]}>
-              <Text style={styles.featureIcon}>{f.icon}</Text>
-              <View style={styles.featureText}>
-                <Text style={styles.featureTitle}>{f.title}</Text>
-                <Text style={styles.featureDesc}>{f.desc}</Text>
+        {!connected && (
+          <View style={styles.featuresCard}>
+            {[
+              { icon: '⚡', title: 'Real transactions', desc: 'Transactions appear in your inbox to assign to pockets.' },
+              { icon: '🔒', title: 'Bank-level security', desc: 'Plaid is trusted by thousands of apps and millions of users.' },
+              { icon: '👁', title: 'Read-only access', desc: 'We can only read your transactions — we cannot move money.' },
+            ].map((f, i) => (
+              <View key={i} style={[styles.featureRow, i < 2 && styles.featureBorder]}>
+                <Text style={styles.featureIcon}>{f.icon}</Text>
+                <View style={styles.featureText}>
+                  <Text style={styles.featureTitle}>{f.title}</Text>
+                  <Text style={styles.featureDesc}>{f.desc}</Text>
+                </View>
               </View>
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
+        )}
 
-        <View style={styles.noticeCard}>
-          <Text style={styles.noticeText}>
-            🚧  Bank connection is coming soon. This feature will be available once the backend is set up.
-          </Text>
-        </View>
-
-        <TouchableOpacity style={styles.connectBtn} activeOpacity={0.85}>
-          <Text style={styles.connectBtnText}>Connect with Plaid</Text>
-        </TouchableOpacity>
+        {loading ? (
+          <ActivityIndicator color="#00D4AA" style={{ marginTop: 40 }} />
+        ) : connected ? (
+          <>
+            <TouchableOpacity
+              style={[styles.syncBtn, syncing && { opacity: 0.7 }]}
+              onPress={handleSync}
+              disabled={syncing}
+              activeOpacity={0.85}
+            >
+              {syncing
+                ? <ActivityIndicator color="#0B1120" />
+                : <Text style={styles.syncBtnText}>Sync Transactions</Text>
+              }
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.reconnectBtn}
+              onPress={handleConnect}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.reconnectBtnText}>Connect a different bank</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity
+            style={[styles.connectBtn, connecting && { opacity: 0.7 }]}
+            onPress={handleConnect}
+            disabled={connecting}
+            activeOpacity={0.85}
+          >
+            {connecting
+              ? <ActivityIndicator color="#0B1120" />
+              : <Text style={styles.connectBtnText}>Connect with Plaid</Text>
+            }
+          </TouchableOpacity>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -75,13 +207,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#151F32', alignItems: 'center', justifyContent: 'center',
     marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
+  heroIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' },
   heroEmoji: { fontSize: 36 },
   heroTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', marginBottom: 12 },
   heroSubtitle: { fontSize: 14, color: '#8899AA', textAlign: 'center', lineHeight: 22 },
 
   featuresCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 16, overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 24, overflow: 'hidden',
   },
   featureRow: { flexDirection: 'row', alignItems: 'flex-start', padding: 16 },
   featureBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
@@ -90,17 +223,20 @@ const styles = StyleSheet.create({
   featureTitle: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', marginBottom: 3 },
   featureDesc: { fontSize: 13, color: '#8899AA', lineHeight: 18 },
 
-  noticeCard: {
-    marginHorizontal: 20, backgroundColor: '#1C2B45', borderRadius: 12,
-    padding: 14, marginBottom: 20,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
-  },
-  noticeText: { fontSize: 13, color: '#8899AA', lineHeight: 20 },
-
   connectBtn: {
-    marginHorizontal: 20, backgroundColor: '#1C2B45',
+    marginHorizontal: 20, backgroundColor: '#00D4AA',
     borderRadius: 16, paddingVertical: 16, alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
-  connectBtnText: { fontSize: 15, fontWeight: '700', color: '#4A5E78' },
+  connectBtnText: { fontSize: 15, fontWeight: '700', color: '#0B1120' },
+
+  syncBtn: {
+    marginHorizontal: 20, backgroundColor: '#00D4AA',
+    borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginBottom: 12,
+  },
+  syncBtnText: { fontSize: 15, fontWeight: '700', color: '#0B1120' },
+
+  reconnectBtn: {
+    marginHorizontal: 20, paddingVertical: 14, alignItems: 'center',
+  },
+  reconnectBtnText: { fontSize: 14, color: '#4A5E78', fontWeight: '500' },
 });
