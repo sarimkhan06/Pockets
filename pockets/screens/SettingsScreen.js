@@ -195,12 +195,6 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
             value={bankStatusLabel}
             onPress={() => navigation.navigate('ConnectBank')}
           />
-          <Row
-            icon="⚡"
-            label="Sync Transactions"
-            onPress={handleSync}
-            loading={syncing}
-          />
         </View>
 
         {/* Account */}

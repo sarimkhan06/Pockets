@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 
 import { API_URL } from '../lib/config';
@@ -10,6 +10,7 @@ export default function TransactionsScreen() {
   const [transactions, setTransactions] = useState([]);
   const [pockets, setPockets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -35,6 +36,32 @@ export default function TransactionsScreen() {
     }, [])
   );
 
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      const res = await fetch(`${API_URL}/plaid/sync-transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      Alert.alert('Synced', `${data.count} new transaction${data.count !== 1 ? 's' : ''} added.`);
+      const [txRes, pocketsRes] = await Promise.all([
+        fetch(`${API_URL}/transactions?userId=${userId}`),
+        fetch(`${API_URL}/pockets?userId=${userId}`),
+      ]);
+      setTransactions(await txRes.json());
+      setPockets(await pocketsRes.json());
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to sync transactions');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const getPocket = (pocketId) => pockets.find(p => p.id === pocketId);
 
   if (loading) {
@@ -51,6 +78,12 @@ export default function TransactionsScreen() {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>All Transactions</Text>
+        <TouchableOpacity onPress={handleSync} disabled={syncing} style={styles.syncBtn} activeOpacity={0.7}>
+          {syncing
+            ? <ActivityIndicator size="small" color="#00D4AA" />
+            : <Text style={styles.syncBtnText}>⚡ Sync</Text>
+          }
+        </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
@@ -100,8 +133,10 @@ export default function TransactionsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B1120' },
-  header: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.5 },
+  syncBtn: { backgroundColor: '#151F32', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
+  syncBtnText: { fontSize: 13, fontWeight: '600', color: '#00D4AA' },
 
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyText: { fontSize: 15, color: '#8899AA' },
