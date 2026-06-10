@@ -70,7 +70,7 @@ export default function ConnectBankScreen({ navigation }) {
         },
         onExit: (exit) => {
           if (exit.error) {
-            Alert.alert('Error', exit.error.display_message || 'Something went wrong with Plaid');
+            Alert.alert('Error', exit.error.display_message || 'Something went wrong. Please try again.');
           }
           setConnecting(false);
         },

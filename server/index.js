@@ -19,10 +19,10 @@ const plaidClient = new PlaidApi(plaidConfig);
 const app = express();
 app.use(express.json());
 
-// Connect to Supabase using the URL and key from .env
+// Connect to Supabase using the service role key — bypasses RLS for trusted server operations
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_KEY
 );
 
 // --- Helpers ---
@@ -33,7 +33,7 @@ async function initializePocketBalances(userId) {
     .from('plaid_items').select('access_token').eq('user_id', userId).single();
   if (!plaidItem) return { distributed: false };
 
-  const balanceResponse = await plaidClient.accountsBalanceGet({
+  const balanceResponse = await plaidClient.accountsGet({
     access_token: plaidItem.access_token,
   });
   const totalBalance = balanceResponse.data.accounts
@@ -536,8 +536,9 @@ app.post('/plaid/sync-transactions', async (req, res) => {
 
     const skipCategories = ['TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS', 'BANK_FEES'];
     const plaidTransactions = response.data.transactions.filter(tx => {
-      if (tx.transaction_type === 'special') return false;
-      if (skipCategories.includes(tx.personal_finance_category?.primary)) return false;
+      const category = tx.personal_finance_category?.primary;
+      if (category === 'INCOME') return true;
+      if (skipCategories.includes(category)) return false;
       return true;
     });
 
@@ -585,7 +586,16 @@ app.post('/plaid/sync-transactions', async (req, res) => {
       .not('plaid_transaction_id', 'is', null);
 
     const existingIds = new Set((existing || []).map(t => t.plaid_transaction_id));
-    const newTransactions = toInsert.filter(tx => !existingIds.has(tx.plaid_transaction_id));
+
+    // On first sync (no existing transactions), only import from today forward
+    // so historical transactions don't double-count the opening balance
+    const isFirstSync = existingIds.size === 0;
+    const todayStr = now.toISOString().split('T')[0];
+    const newTransactions = toInsert.filter(tx => {
+      if (existingIds.has(tx.plaid_transaction_id)) return false;
+      if (isFirstSync && plaidTransactions.find(p => p.transaction_id === tx.plaid_transaction_id)?.date < todayStr) return false;
+      return true;
+    });
 
     if (newTransactions.length > 0) {
       const { error: insertError } = await supabase.from('transactions').insert(newTransactions);

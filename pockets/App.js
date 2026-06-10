@@ -58,14 +58,23 @@ export default function App() {
       setUserName(name);
 
       try {
-        const res = await fetch(`${API_URL}/user-settings?userId=${session.user.id}`);
-        const settings = await res.json();
-        if (settings?.method_id) setCurrentMethod(TEMPLATES[settings.method_id]);
+        const [settingsRes, plaidRes] = await Promise.all([
+          fetch(`${API_URL}/user-settings?userId=${session.user.id}`),
+          fetch(`${API_URL}/plaid/status?userId=${session.user.id}`),
+        ]);
+        const settings = await settingsRes.json();
+        const plaid = await plaidRes.json();
+        if (settings?.method_id && plaid?.connected) {
+          setCurrentMethod(TEMPLATES[settings.method_id]);
+          setScreen('main');
+          syncAndNotify(session.user.id);
+        } else {
+          setScreen('onboarding');
+        }
       } catch (e) {
-        console.error('Failed to fetch user settings:', e);
+        setScreen('main');
+        syncAndNotify(session.user.id);
       }
-      setScreen('main');
-      syncAndNotify(session.user.id);
     });
 
     // Listen for auth changes — only send to login on explicit sign-out
@@ -108,8 +117,24 @@ export default function App() {
             onLogin={async () => {
               const { data: { session } } = await supabase.auth.getSession();
               setUserName(session?.user?.user_metadata?.full_name || '');
-              setScreen('main');
-              if (session?.user?.id) syncAndNotify(session.user.id);
+              try {
+                const [settingsRes, plaidRes] = await Promise.all([
+                  fetch(`${API_URL}/user-settings?userId=${session.user.id}`),
+                  fetch(`${API_URL}/plaid/status?userId=${session.user.id}`),
+                ]);
+                const settings = await settingsRes.json();
+                const plaid = await plaidRes.json();
+                if (settings?.method_id && plaid?.connected) {
+                  setCurrentMethod(TEMPLATES[settings.method_id]);
+                  setScreen('main');
+                  syncAndNotify(session.user.id);
+                } else {
+                  setScreen('onboarding');
+                }
+              } catch (e) {
+                setScreen('main');
+                syncAndNotify(session.user.id);
+              }
             }}
             onSignUp={(user) => { setSignUpUser(user); setScreen('onboarding'); }}
           />

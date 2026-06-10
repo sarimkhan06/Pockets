@@ -5,6 +5,49 @@ import {
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 
+const LogoIcon = () => (
+  <View style={{ width: 40, height: 32, position: 'relative' }}>
+    {/* Back pocket — offset right */}
+    <View style={{
+      position: 'absolute',
+      width: 22, height: 20,
+      borderWidth: 2.5, borderTopWidth: 0,
+      borderColor: 'rgba(11,17,32,0.35)',
+      borderBottomLeftRadius: 7, borderBottomRightRadius: 7,
+      top: 10, left: 16,
+    }} />
+    {/* Coin above back pocket */}
+    <View style={{
+      position: 'absolute',
+      width: 13, height: 13, borderRadius: 7,
+      backgroundColor: 'rgba(11,17,32,0.35)',
+      alignItems: 'center', justifyContent: 'center',
+      top: 2, left: 21,
+    }}>
+      <Text style={{ fontSize: 8, fontWeight: '900', color: '#00D4AA' }}>$</Text>
+    </View>
+    {/* Front pocket */}
+    <View style={{
+      position: 'absolute',
+      width: 22, height: 20,
+      borderWidth: 2.5, borderTopWidth: 0,
+      borderColor: '#0B1120',
+      borderBottomLeftRadius: 7, borderBottomRightRadius: 7,
+      top: 6, left: 2,
+    }} />
+    {/* Coin above front pocket */}
+    <View style={{
+      position: 'absolute',
+      width: 13, height: 13, borderRadius: 7,
+      backgroundColor: '#0B1120',
+      alignItems: 'center', justifyContent: 'center',
+      top: 0, left: 7,
+    }}>
+      <Text style={{ fontSize: 8, fontWeight: '900', color: '#00D4AA' }}>$</Text>
+    </View>
+  </View>
+);
+
 export default function LoginScreen({ onLogin, onSignUp }) {
   const [isSignUp, setIsSignUp] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -109,7 +152,7 @@ export default function LoginScreen({ onLogin, onSignUp }) {
         <View style={styles.inner}>
           <View style={styles.logoArea}>
             <View style={styles.logoCircle}>
-              <Text style={styles.logoText}>P</Text>
+              <LogoIcon />
             </View>
             <Text style={styles.appName}>Pockets</Text>
           </View>
@@ -165,7 +208,7 @@ export default function LoginScreen({ onLogin, onSignUp }) {
         {/* Logo */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoText}>P</Text>
+            <LogoIcon />
           </View>
           <Text style={styles.appName}>Pockets</Text>
           <Text style={styles.tagline}>Your money, your way.</Text>
@@ -287,11 +330,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
-  },
-  logoText: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#0B1120',
   },
   appName: {
     fontSize: 28,

@@ -77,9 +77,7 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
       }
       if (!userId) throw new Error('Could not get your account info. Please log in again.');
 
-      if (isRetake) {
-        await fetch(`${API_URL}/pockets/user/${userId}`, { method: 'DELETE' });
-      }
+      await fetch(`${API_URL}/pockets/user/${userId}`, { method: 'DELETE' });
 
       await fetch(`${API_URL}/user-settings`, {
         method: 'POST',
@@ -289,7 +287,7 @@ function ConnectBankStep({ signUpUser, onComplete }) {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.topSection}>
-        <Text style={styles.stepLabel}>Last step</Text>
+        <Text style={styles.stepLabel}>Almost there</Text>
         <Text style={styles.title}>Connect your bank</Text>
         <Text style={styles.subtitle}>
           Link your bank so your real transactions flow into your pockets automatically.
@@ -546,7 +544,7 @@ function MFAStep({ onComplete }) {
     >
       <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <View style={styles.topSection}>
-          <Text style={styles.stepLabel}>Security</Text>
+          <Text style={styles.stepLabel}>Last step</Text>
           <Text style={styles.title}>Secure your account</Text>
           <Text style={styles.subtitle}>
             Since your bank is now connected, we strongly recommend enabling two-factor authentication. Without it, anyone who gets your password can access your financial data.
