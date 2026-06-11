@@ -1,3 +1,18 @@
+// TransactionsScreen.js — shows every transaction for the user, newest first.
+//
+// Each transaction row shows:
+//   - Emoji icon
+//   - Merchant name + date
+//   - A color-coded "pocket tag" showing which pocket it was assigned to
+//   - Amount (red for expenses, green for income)
+//
+// Transactions without a pocket_id show "Inbox" as their pocket label,
+// meaning they haven't been assigned yet (they live in InboxScreen).
+//
+// The "⚡ Sync" button manually triggers a Plaid transaction pull.
+// On app open, App.js does this automatically — but this button lets the user
+// force a refresh if they just made a purchase and want to see it now.
+
 import { useState, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -7,11 +22,12 @@ import { formatDate, sortTxNewestFirst, formatCurrency } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 
 export default function TransactionsScreen() {
-  const [transactions, setTransactions] = useState([]);
-  const [pockets, setPockets] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [transactions, setTransactions] = useState([]); // All transactions for this user
+  const [pockets, setPockets] = useState([]);           // All pockets — used to look up pocket name/color
+  const [loading, setLoading] = useState(true);          // Initial full-screen spinner
+  const [syncing, setSyncing] = useState(false);         // Spinner on just the Sync button
 
+  // Refresh data every time the user navigates to this tab
   useFocusEffect(
     useCallback(() => {
       const loadData = async () => {
@@ -20,6 +36,7 @@ export default function TransactionsScreen() {
           const { data: { session } } = await supabase.auth.getSession();
           const userId = session?.user?.id;
 
+          // Fetch both at the same time
           const [txRes, pocketsRes] = await Promise.all([
             fetch(`${API_URL}/transactions?userId=${userId}`),
             fetch(`${API_URL}/pockets?userId=${userId}`),
@@ -36,11 +53,15 @@ export default function TransactionsScreen() {
     }, [])
   );
 
+  // Calls the backend, which tells Plaid to fetch new transactions, then reloads the list
   const handleSync = async () => {
     setSyncing(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
+
+      // POST to /plaid/sync-transactions — the backend asks Plaid for new transactions
+      // and saves any new ones to Supabase, then returns how many were added
       const res = await fetch(`${API_URL}/plaid/sync-transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -48,7 +69,11 @@ export default function TransactionsScreen() {
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+
+      // Show how many new transactions arrived
       Alert.alert('Synced', `${data.count} new transaction${data.count !== 1 ? 's' : ''} added.`);
+
+      // Reload the list to include the new transactions
       const [txRes, pocketsRes] = await Promise.all([
         fetch(`${API_URL}/transactions?userId=${userId}`),
         fetch(`${API_URL}/pockets?userId=${userId}`),
@@ -62,6 +87,8 @@ export default function TransactionsScreen() {
     }
   };
 
+  // Helper: given a pocketId, find and return the full pocket object from our local state.
+  // We use this to display the pocket's name and color next to each transaction.
   const getPocket = (pocketId) => pockets.find(p => p.id === pocketId);
 
   if (loading) {
@@ -76,6 +103,7 @@ export default function TransactionsScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Header with title and sync button */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>All Transactions</Text>
         <TouchableOpacity onPress={handleSync} disabled={syncing} style={styles.syncBtn} activeOpacity={0.7}>
@@ -94,8 +122,10 @@ export default function TransactionsScreen() {
         ) : (
           <View style={styles.txCard}>
             {sorted.map((tx, index) => {
+              // Look up this transaction's pocket info
               const pocket = getPocket(tx.pocket_id);
-              const pocketColor = pocket?.color ?? '#4A5E78';
+              const pocketColor = pocket?.color ?? '#4A5E78'; // Default grey if no pocket
+              // tx.pocket_id exists but pocket not found = 'Unknown', no id = 'Inbox' (unassigned)
               const pocketName = pocket?.name ?? (tx.pocket_id ? 'Unknown' : 'Inbox');
               return (
                 <View
@@ -110,6 +140,7 @@ export default function TransactionsScreen() {
                     <View style={styles.txMeta}>
                       <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
                       <Text style={styles.txDot}> · </Text>
+                      {/* Pocket tag: background is the pocket color at 13% opacity ('22' in hex) */}
                       <View style={[styles.pocketTag, { backgroundColor: pocketColor + '22' }]}>
                         <Text style={[styles.pocketTagText, { color: pocketColor }]}>
                           {pocketName}
@@ -133,9 +164,16 @@ export default function TransactionsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B1120' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16,
+  },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', letterSpacing: -0.5 },
-  syncBtn: { backgroundColor: '#151F32', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)' },
+  syncBtn: {
+    backgroundColor: '#151F32', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+  },
   syncBtnText: { fontSize: 13, fontWeight: '600', color: '#00D4AA' },
 
   empty: { alignItems: 'center', paddingTop: 80 },

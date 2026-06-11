@@ -1,3 +1,14 @@
+// ChangePasswordScreen.js — lets the user update their account password.
+//
+// If the user has 2FA enabled, we require them to verify it FIRST before
+// letting them change their password. This prevents an attacker who steals
+// someone's session from immediately changing the password.
+//
+// Step machine:
+//   'loading'  → Checking if MFA is set up (spinner)
+//   'mfa'      → User must enter their 6-digit authenticator code first
+//   'password' → User enters their new password + confirmation
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
@@ -15,32 +26,37 @@ export default function ChangePasswordScreen({ navigation }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // On mount, check if this user has 2FA enrolled.
+  // If they do, create a challenge and show the MFA verification screen.
+  // If they don't, skip straight to the password form.
   useEffect(() => {
     const checkMFA = async () => {
       try {
         const { data } = await supabase.auth.mfa.listFactors();
-        const totp = data?.totp?.[0];
+        const totp = data?.totp?.[0]; // Get the first TOTP factor (if any)
         if (totp) {
+          // Create a fresh challenge for this session
           const { data: challenge } = await supabase.auth.mfa.challenge({ factorId: totp.id });
           setFactorId(totp.id);
           setChallengeId(challenge.id);
-          setStep('mfa');
+          setStep('mfa'); // Show the code input first
         } else {
-          setStep('password');
+          setStep('password'); // No MFA → go straight to the password form
         }
       } catch (e) {
-        setStep('password');
+        setStep('password'); // If the check fails, allow proceeding without MFA
       }
     };
     checkMFA();
   }, []);
 
+  // Verifies the 6-digit MFA code — if correct, advances to the password step
   const handleMFAVerify = async () => {
     setVerifying(true);
     try {
       const { error } = await supabase.auth.mfa.verify({ factorId, challengeId, code: mfaCode });
       if (error) throw error;
-      setStep('password');
+      setStep('password'); // MFA passed — now show the password form
     } catch (e) {
       Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
       setMfaCode('');
@@ -49,6 +65,7 @@ export default function ChangePasswordScreen({ navigation }) {
     }
   };
 
+  // Validates and saves the new password via Supabase
   const handleSave = async () => {
     if (newPassword.length < 6) {
       Alert.alert('Too short', 'Password must be at least 6 characters.');
@@ -60,6 +77,7 @@ export default function ChangePasswordScreen({ navigation }) {
     }
     setSaving(true);
     try {
+      // supabase.auth.updateUser modifies the currently signed-in user's account
       const { error } = await supabase.auth.updateUser({ password: newPassword });
       if (error) throw error;
       Alert.alert('Password updated', 'Your password has been changed successfully.', [
@@ -72,6 +90,7 @@ export default function ChangePasswordScreen({ navigation }) {
     }
   };
 
+  // Show full-screen spinner while the MFA check is in progress
   if (step === 'loading') {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -95,6 +114,7 @@ export default function ChangePasswordScreen({ navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
+        {/* MFA verification step — only shown if user has 2FA */}
         {step === 'mfa' && (
           <>
             <Text style={styles.title}>Verify your identity</Text>
@@ -126,6 +146,7 @@ export default function ChangePasswordScreen({ navigation }) {
           </>
         )}
 
+        {/* Password entry step */}
         {step === 'password' && (
           <>
             <Text style={styles.title}>New password</Text>
@@ -149,6 +170,7 @@ export default function ChangePasswordScreen({ navigation }) {
               <TextInput
                 style={[
                   styles.input,
+                  // Red border if there's text but it doesn't match
                   confirmPassword.length > 0 && confirmPassword !== newPassword && styles.inputError,
                 ]}
                 value={confirmPassword}
@@ -162,6 +184,7 @@ export default function ChangePasswordScreen({ navigation }) {
               )}
             </View>
 
+            {/* Button disabled until both conditions are met: 6+ chars AND passwords match */}
             <TouchableOpacity
               style={[styles.btn, (newPassword.length < 6 || newPassword !== confirmPassword || saving) && styles.btnDisabled]}
               onPress={handleSave}

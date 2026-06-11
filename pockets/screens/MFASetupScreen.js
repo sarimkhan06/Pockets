@@ -1,3 +1,16 @@
+// MFASetupScreen.js — lets the user enable TOTP-based two-factor authentication.
+//
+// TOTP (Time-based One-Time Password) is the standard used by Google Authenticator,
+// Authy, 1Password, etc. It works by sharing a secret key between the app and the
+// authenticator — both use the same algorithm to generate a 6-digit code that
+// changes every 30 seconds.
+//
+// The setup flow here:
+//   1. On mount, call Supabase MFA enroll → get back a secret key + factorId
+//   2. Display the secret key so the user can type it into their authenticator app
+//   3. User enters the 6-digit code their authenticator shows
+//   4. We call challengeAndVerify — if it matches, 2FA is now active on the account
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
@@ -6,22 +19,24 @@ import {
 import { supabase } from '../lib/supabase';
 
 export default function MFASetupScreen({ navigation }) {
-  const [loading, setLoading] = useState(true);
-  const [secret, setSecret] = useState(null);
-  const [factorId, setFactorId] = useState(null);
-  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(true);    // Spinner while enrolling
+  const [secret, setSecret] = useState(null);      // The TOTP secret key shown to the user
+  const [factorId, setFactorId] = useState(null);  // Supabase's ID for this factor
+  const [code, setCode] = useState('');            // The 6-digit verification code
   const [verifying, setVerifying] = useState(false);
 
+  // On mount, ask Supabase to enroll a new TOTP factor.
+  // This generates a unique secret key tied to this user's account.
   useEffect(() => {
     const enroll = async () => {
       try {
         const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp' });
         if (error) throw error;
-        setSecret(data.totp.secret);
+        setSecret(data.totp.secret); // The secret the user needs to enter in their authenticator app
         setFactorId(data.id);
       } catch (e) {
         Alert.alert('Error', e.message || 'Failed to set up 2FA');
-        navigation.goBack();
+        navigation.goBack(); // Can't proceed without a secret, so go back
       } finally {
         setLoading(false);
       }
@@ -29,10 +44,14 @@ export default function MFASetupScreen({ navigation }) {
     enroll();
   }, []);
 
+  // Called when the user taps "Enable 2FA" after entering their authenticator code
   const handleVerify = async () => {
     if (code.length !== 6) return;
     setVerifying(true);
     try {
+      // challengeAndVerify creates a challenge AND verifies the code in one step.
+      // If the code is correct, Supabase marks this factor as verified and
+      // the account now requires 2FA on every login.
       const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code });
       if (error) throw error;
       Alert.alert('2FA Enabled', 'Two-factor authentication is now active on your account.', [
@@ -69,17 +88,20 @@ export default function MFASetupScreen({ navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
 
+        {/* Step 1: Add the secret to an authenticator app */}
         <Text style={styles.stepLabel}>Step 1</Text>
         <Text style={styles.title}>Add to authenticator app</Text>
         <Text style={styles.subtitle}>
           Open Google Authenticator (or Authy), tap the + button, choose "Enter a setup key", and type in the key below.
         </Text>
 
+        {/* The secret key — selectable so the user can copy it */}
         <View style={styles.secretCard}>
           <Text style={styles.secretLabel}>Setup key — tap and hold to copy</Text>
           <Text style={styles.secretKey} selectable>{secret}</Text>
         </View>
 
+        {/* Step 2: Confirm with the 6-digit code */}
         <Text style={[styles.stepLabel, { marginTop: 32 }]}>Step 2</Text>
         <Text style={styles.title}>Enter the 6-digit code</Text>
         <Text style={styles.subtitle}>
@@ -89,6 +111,7 @@ export default function MFASetupScreen({ navigation }) {
         <TextInput
           style={styles.codeInput}
           value={code}
+          // Strip non-digits and cap at 6 characters
           onChangeText={v => setCode(v.replace(/\D/g, '').slice(0, 6))}
           keyboardType="number-pad"
           placeholder="000000"
@@ -97,6 +120,7 @@ export default function MFASetupScreen({ navigation }) {
           textAlign="center"
         />
 
+        {/* Button is disabled until exactly 6 digits are entered */}
         <TouchableOpacity
           style={[styles.btn, (code.length !== 6 || verifying) && styles.btnDisabled]}
           onPress={handleVerify}

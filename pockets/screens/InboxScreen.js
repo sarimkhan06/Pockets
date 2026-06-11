@@ -1,3 +1,25 @@
+// InboxScreen.js — the most complex screen in the app.
+//
+// The inbox holds transactions that have arrived from Plaid but haven't been
+// assigned to a pocket yet. The user reviews each one and decides where it goes.
+//
+// Two categories of inbox items:
+//   EXPENSE (amount < 0) — e.g., a $50 grocery purchase
+//     → User picks one pocket to charge it against
+//     → OVERFLOW: if the pocket doesn't have enough balance, pick a second pocket
+//       to cover the difference
+//
+//   INCOME (amount > 0) — e.g., a $3000 paycheck
+//     → Three distribution modes:
+//       "By method"   — auto-split using each pocket's income_percent setting
+//       "All in one"  — put the entire amount into a single chosen pocket
+//       "Custom"      — user types a dollar amount for each pocket manually
+//
+// State machine for each transaction:
+//   status: 'pending'     → not yet handled by the user (shown in "Needs your attention")
+//   status: 'manual'      → assigned to a specific pocket (expense)
+//   status: 'distributed' → income split across multiple pockets
+
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 
@@ -6,19 +28,26 @@ import { API_URL } from '../lib/config';
 import { formatDate, formatCurrency } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 
+// onRefreshInboxCount is passed from MainNavigator so the tab badge updates after assignments
 export default function InboxScreen({ onRefreshInboxCount }) {
-  const [items, setItems] = useState([]);
-  const [pockets, setPockets] = useState([]);
-  const [expandedId, setExpandedId] = useState(null);
+  const [items, setItems] = useState([]);         // All inbox transactions (with status + selectedPocket added)
+  const [pockets, setPockets] = useState([]);     // All user pockets (for picking where to assign)
+  const [expandedId, setExpandedId] = useState(null); // Which transaction's picker panel is open
   const [loading, setLoading] = useState(true);
-  const [overflowState, setOverflowState] = useState(null);
-  // overflowState = { txId, primaryPocket, overflowAmount } when a transaction needs overflow handling
-  const [pendingPocketId, setPendingPocketId] = useState(null);
-  const [distributionMode, setDistributionMode] = useState('method');
-  const [selectedSinglePocket, setSelectedSinglePocket] = useState(null);
-  const [customAmounts, setCustomAmounts] = useState({});
 
-  // Reload every time the user navigates to this tab
+  // Overflow state: when an expense exceeds a pocket's balance, we enter overflow mode.
+  // This holds: { txId, primaryPocket, overflowAmount }
+  // primaryPocket already has partial funds; overflowAmount is the remainder to cover.
+  const [overflowState, setOverflowState] = useState(null);
+
+  const [pendingPocketId, setPendingPocketId] = useState(null); // ID of pocket currently being saved (shows spinner)
+
+  // Income distribution mode — resets to 'method' whenever a different transaction is expanded
+  const [distributionMode, setDistributionMode] = useState('method'); // 'method' | 'all_in_one' | 'custom'
+  const [selectedSinglePocket, setSelectedSinglePocket] = useState(null); // For 'all_in_one' mode
+  const [customAmounts, setCustomAmounts] = useState({}); // For 'custom' mode: { pocketId: '50.00', ... }
+
+  // Reload every time the user navigates to this tab (a new transaction might have arrived)
   useFocusEffect(
     useCallback(() => {
       const loadData = async () => {
@@ -35,9 +64,12 @@ export default function InboxScreen({ onRefreshInboxCount }) {
           const inboxData = await inboxRes.json();
           const pocketsData = await pocketsRes.json();
 
+          // Add client-side status + selectedPocket to each transaction.
+          // This lets us track what the user has done THIS session without
+          // re-fetching from the server after every action.
           setItems(inboxData.map(tx => ({ ...tx, status: 'pending', selectedPocket: null })));
           setPockets(pocketsData);
-          onRefreshInboxCount?.(userId);
+          onRefreshInboxCount?.(userId); // Update the tab badge
         } catch (error) {
           console.error('Failed to load inbox:', error);
         } finally {
@@ -49,17 +81,20 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     }, [])
   );
 
+  // Reset the distribution controls whenever the user opens a different transaction's picker
   useEffect(() => {
     setDistributionMode('method');
     setSelectedSinglePocket(null);
     setCustomAmounts({});
   }, [expandedId]);
 
+  // Toggle the expanded picker panel open/closed
   const handleManual = (id) => {
     setExpandedId(expandedId === id ? null : id);
-    setOverflowState(null);
+    setOverflowState(null); // Clear any overflow state when closing
   };
 
+  // Re-fetch pockets and update the tab badge after an assignment changes pocket balances
   const refreshPockets = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
@@ -68,32 +103,37 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     onRefreshInboxCount?.(userId);
   };
 
+  // Handles assigning an EXPENSE transaction to a pocket.
+  // If the pocket doesn't have enough balance, switches to overflow mode instead.
   const assignPocket = async (item, pocket) => {
     const txAmount = Math.abs(item.amount);
 
-    // If the transaction exceeds what's in this pocket, go into overflow mode
+    // Check if this pocket can fully cover the expense
     if (txAmount > pocket.balance) {
+      // Not enough — enter overflow mode. The UI will ask the user to pick a second pocket
+      // to cover the difference (overflowAmount).
       setOverflowState({
         txId: item.id,
         primaryPocket: pocket,
-        overflowAmount: txAmount - pocket.balance,
+        overflowAmount: txAmount - pocket.balance, // How much the primary pocket is short
       });
       return;
     }
 
-    // No overflow — assign normally
-    setPendingPocketId(pocket.id);
+    // Pocket has enough — do a normal single-pocket assignment
+    setPendingPocketId(pocket.id); // Show spinner on this pocket's row
     try {
       await fetch(`${API_URL}/transactions/assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transactionId: item.id, pocketId: pocket.id }),
       });
+      // Update this item's status locally (no need to re-fetch the entire inbox list)
       setItems(prev =>
         prev.map(i => i.id === item.id ? { ...i, status: 'manual', selectedPocket: pocket } : i)
       );
-      setExpandedId(null);
-      await refreshPockets();
+      setExpandedId(null); // Close the picker
+      await refreshPockets(); // Balances changed — update them
     } catch (error) {
       console.error('Failed to assign pocket:', error);
     } finally {
@@ -101,6 +141,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     }
   };
 
+  // Handles assigning an EXPENSE that overflows into two pockets.
+  // The backend deducts the full primary pocket balance + the overflow from the secondary pocket.
   const assignWithOverflow = async (txId, primaryPocket, overflowPocket) => {
     setPendingPocketId(overflowPocket.id);
     try {
@@ -126,14 +168,21 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     }
   };
 
-  // Splits income across pockets that have income_percent set, proportional to their stored percentages
+  // Calculates how to split an income amount across pockets using their income_percent values.
+  // Example: income = $3000, Needs=50%, Wants=30%, Savings=20%
+  //   → Needs gets $1500, Wants gets $900, Savings gets $600
+  // The last pocket gets the "remaining" amount to avoid rounding errors (e.g., $599.99 vs $600.00).
   const calculateMethodDistribution = (income) => {
-    const eligible = pockets.filter(p => p.income_percent != null);
+    const eligible = pockets.filter(p => p.income_percent != null); // Only pockets with a % set
     if (eligible.length === 0) return [];
+
+    // If percentages don't add up to 100, we normalize them (scale proportionally)
     const totalPct = eligible.reduce((sum, p) => sum + p.income_percent, 0);
     if (totalPct === 0) return [];
+
     let remaining = income;
     return eligible.map((p, i) => {
+      // The last pocket gets whatever is left over to absorb rounding errors
       if (i === eligible.length - 1) return { ...p, share: Math.round(remaining * 100) / 100 };
       const share = Math.round((p.income_percent / totalPct) * income * 100) / 100;
       remaining -= share;
@@ -141,8 +190,10 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     });
   };
 
+  // Sends the income distribution to the backend, which tops up each listed pocket.
+  // distributions is an array of { pocketId, topUpAmount }
   const distributeIncome = async (item, distributions) => {
-    setPendingPocketId('distributing');
+    setPendingPocketId('distributing'); // Special sentinel value — no single pocket is "pending"
     try {
       const res = await fetch(`${API_URL}/transactions/distribute-income`, {
         method: 'POST',
@@ -166,6 +217,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     }
   };
 
+  // Split items into two groups for the UI sections
   const pending = items.filter(i => i.status === 'pending');
   const done = items.filter(i => i.status !== 'pending');
 
@@ -181,6 +233,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Inbox</Text>
+        {/* Red badge showing the count of pending items */}
         {pending.length > 0 && (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{pending.length}</Text>
@@ -190,6 +243,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
 
       <ScrollView showsVerticalScrollIndicator={false}>
 
+        {/* All-clear state — nothing pending and nothing resolved */}
         {pending.length === 0 && done.length === 0 && (
           <View style={styles.empty}>
             <Text style={styles.emptyEmoji}>✓</Text>
@@ -198,21 +252,28 @@ export default function InboxScreen({ onRefreshInboxCount }) {
           </View>
         )}
 
-        {/* Pending transactions */}
+        {/* ── PENDING SECTION ──────────────────────────────────── */}
         {pending.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>Needs your attention</Text>
             {pending.map(item => {
               const isIncome = item.amount > 0;
+
+              // Pre-calculate values used in the picker UI
               const methodDist = isIncome ? calculateMethodDistribution(item.amount) : [];
-              const totalCustom = pockets.reduce((sum, p) => sum + (parseFloat(customAmounts[p.id] || '0') || 0), 0);
+              const totalCustom = pockets.reduce(
+                (sum, p) => sum + (parseFloat(customAmounts[p.id] || '0') || 0), 0
+              );
+              // Custom distribution is valid when the amounts sum to the transaction amount (within $0.01)
               const isCustomValid = Math.abs(totalCustom - item.amount) < 0.01;
               const customDist = pockets
                 .filter(p => parseFloat(customAmounts[p.id] || '0') > 0)
                 .map(p => ({ pocketId: p.id, topUpAmount: parseFloat(customAmounts[p.id]) }));
+
               return (
               <View key={item.id}>
                 <View style={styles.txCard}>
+                  {/* Transaction summary row */}
                   <View style={styles.txRow}>
                     <View style={styles.txIcon}>
                       <Text style={styles.txEmoji}>{item.icon}</Text>
@@ -225,6 +286,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                       <Text style={[styles.txAmount, { color: isIncome ? '#00D4AA' : '#FF5252' }]}>
                         {isIncome ? '+' : '-'}${formatCurrency(Math.abs(item.amount))}
                       </Text>
+                      {/* "income" badge only shown for positive amounts */}
                       {isIncome && (
                         <View style={styles.incomeBadge}>
                           <Text style={styles.incomeBadgeText}>income</Text>
@@ -233,7 +295,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                     </View>
                   </View>
 
-                  {/* Action buttons */}
+                  {/* The "Distribute" / "Assign to Pocket" button — toggles the picker open/closed */}
                   <View style={styles.actionRow}>
                     <TouchableOpacity
                       style={[styles.manualBtn, expandedId === item.id && styles.manualBtnActive]}
@@ -246,20 +308,25 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Pocket picker (shown when Manual is tapped) */}
+                  {/* ── PICKER PANEL (shown when the button is tapped) ── */}
                   {expandedId === item.id && (
                     <View style={styles.pocketPicker}>
-                      <TouchableOpacity onPress={() => { setExpandedId(null); setOverflowState(null); }} style={styles.pickerCancel}>
+                      <TouchableOpacity
+                        onPress={() => { setExpandedId(null); setOverflowState(null); }}
+                        style={styles.pickerCancel}
+                      >
                         <Text style={styles.pickerCancelText}>✕ Cancel</Text>
                       </TouchableOpacity>
+
                       {isIncome ? (
+                        // ── INCOME PICKER ──────────────────────────────────
                         <>
-                          {/* Mode selector */}
+                          {/* Mode selector: three tabs */}
                           <View style={styles.modeRow}>
                             {[
-                              { key: 'method', label: 'By method' },
+                              { key: 'method',    label: 'By method' },
                               { key: 'all_in_one', label: 'All in one' },
-                              { key: 'custom', label: 'Custom' },
+                              { key: 'custom',    label: 'Custom' },
                             ].map(m => (
                               <TouchableOpacity
                                 key={m.key}
@@ -273,6 +340,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                             ))}
                           </View>
 
+                          {/* Mode: By method — auto-split based on income_percent */}
                           {distributionMode === 'method' && (
                             methodDist.length === 0 ? (
                               <Text style={styles.noMethodText}>
@@ -303,6 +371,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                             )
                           )}
 
+                          {/* Mode: All in one — full amount goes to one selected pocket */}
                           {distributionMode === 'all_in_one' && (
                             <>
                               <Text style={styles.pickerLabel}>Choose one pocket for the full +${formatCurrency(item.amount)}</Text>
@@ -315,11 +384,13 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                                 >
                                   <View style={[styles.pickerDot, { backgroundColor: p.color }]} />
                                   <Text style={styles.pickerName}>{p.name}</Text>
+                                  {/* Checkmark shown next to the selected pocket */}
                                   {selectedSinglePocket?.id === p.id && (
                                     <Text style={{ color: '#00D4AA', fontSize: 14, fontWeight: '700' }}>✓</Text>
                                   )}
                                 </TouchableOpacity>
                               ))}
+                              {/* Confirm button only appears once a pocket is selected */}
                               {selectedSinglePocket && (
                                 <TouchableOpacity
                                   style={[styles.distributeBtn, pendingPocketId === 'distributing' && { opacity: 0.7 }]}
@@ -336,6 +407,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                             </>
                           )}
 
+                          {/* Mode: Custom — user types a dollar amount per pocket */}
                           {distributionMode === 'custom' && (
                             <>
                               <Text style={styles.pickerLabel}>Enter amounts for each pocket</Text>
@@ -349,6 +421,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                                       style={styles.customInput}
                                       keyboardType="numeric"
                                       value={customAmounts[p.id] || ''}
+                                      // Update just this pocket's amount in the customAmounts object
                                       onChangeText={v => setCustomAmounts(prev => ({ ...prev, [p.id]: v }))}
                                       placeholder="0"
                                       placeholderTextColor="#4A5E78"
@@ -356,9 +429,11 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                                   </View>
                                 </View>
                               ))}
+                              {/* Running total — turns green when it exactly matches the income amount */}
                               <Text style={[styles.customTotal, isCustomValid ? { color: '#00D4AA' } : { color: '#8899AA' }]}>
                                 Total: ${formatCurrency(totalCustom)} / ${formatCurrency(item.amount)}
                               </Text>
+                              {/* Confirm button only appears when the totals match */}
                               {isCustomValid && (
                                 <TouchableOpacity
                                   style={[styles.distributeBtn, pendingPocketId === 'distributing' && { opacity: 0.7 }]}
@@ -376,7 +451,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                           )}
                         </>
                       ) : overflowState?.txId === item.id ? (
-                        // Overflow mode — pick a second pocket to cover the difference
+                        // ── OVERFLOW PICKER ─────────────────────────────────────────
+                        // The primary pocket didn't have enough — pick a second pocket for the rest
                         <>
                           <View style={styles.overflowBanner}>
                             <Text style={styles.overflowText}>
@@ -384,8 +460,11 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                               Pick a pocket for the ${formatCurrency(overflowState.overflowAmount)} overflow:
                             </Text>
                           </View>
+                          {/* Only show pockets that have enough balance to cover the overflow amount */}
                           {pockets.filter(p => p.id !== overflowState.primaryPocket.id && p.balance >= overflowState.overflowAmount).length === 0 ? (
-                            <Text style={styles.noOverflowText}>No pockets have enough balance to cover the ${formatCurrency(overflowState.overflowAmount)} overflow. Try increasing a pocket's budget.</Text>
+                            <Text style={styles.noOverflowText}>
+                              No pockets have enough balance to cover the ${formatCurrency(overflowState.overflowAmount)} overflow. Try increasing a pocket's budget.
+                            </Text>
                           ) : (
                             pockets
                               .filter(p => p.id !== overflowState.primaryPocket.id && p.balance >= overflowState.overflowAmount)
@@ -408,7 +487,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                           )}
                         </>
                       ) : (
-                        // Normal mode — pick which pocket this transaction belongs to
+                        // ── NORMAL EXPENSE PICKER ────────────────────────────────────
+                        // Show all pockets; tapping one calls assignPocket (may trigger overflow)
                         <>
                           <Text style={styles.pickerLabel}>Choose a pocket</Text>
                           {pockets.map(pocket => (
@@ -438,7 +518,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
           </>
         )}
 
-        {/* Resolved transactions */}
+        {/* ── RESOLVED SECTION ─────────────────────────────────────── */}
+        {/* Shows transactions the user already handled this session, dimmed out */}
         {done.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>Resolved</Text>
@@ -451,6 +532,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                   <View style={styles.txDetails}>
                     <Text style={styles.txMerchant}>{item.merchant}</Text>
                     <View style={styles.resolvedTag}>
+                      {/* Show "💸 Distributed" for income, or "→ PocketName" for expenses */}
                       {item.status === 'distributed'
                         ? <Text style={styles.resolvedDistributed}>💸 Distributed</Text>
                         : <Text style={styles.resolvedManual}>→ {item.selectedPocket?.name}</Text>
@@ -500,7 +582,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', marginBottom: 10, overflow: 'hidden',
   },
-  txCardDone: { opacity: 0.6 },
+  txCardDone: { opacity: 0.6 }, // Dimmed to show these are already handled
   txRow: { flexDirection: 'row', alignItems: 'center', padding: 16 },
   txIcon: {
     width: 42, height: 42, borderRadius: 21,
@@ -521,7 +603,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1C2B45', borderRadius: 10, paddingVertical: 10,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
   },
-  manualBtnActive: { borderColor: '#00D4AA' },
+  manualBtnActive: { borderColor: '#00D4AA' }, // Green border when panel is open
   manualBtnText: { fontSize: 13, fontWeight: '600', color: '#FFFFFF' },
 
   pocketPicker: {

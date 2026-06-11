@@ -1,3 +1,20 @@
+// EditPocketScreen.js — lets the user modify or delete an existing pocket.
+//
+// Key concept — transfers when changing balance:
+//   A pocket's balance isn't a free-floating number. If you increase it by $100,
+//   that money must come FROM other pockets. If you decrease it by $100,
+//   that money must GO TO other pockets.
+//
+//   Example: Increasing "Groceries" from $200 to $350 (+$150 diff)
+//     → The user must specify which pockets to take $150 from
+//
+//   Example: Decreasing "Groceries" from $200 to $100 (-$100 diff)
+//     → The user must specify which pockets to send $100 to
+//
+// Delete flow:
+//   If the pocket has a balance, the user must distribute all of it to other pockets
+//   before the delete is confirmed. Transactions assigned to this pocket return to inbox.
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Switch,
@@ -10,19 +27,26 @@ import { formatCurrency } from '../lib/utils';
 
 const COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
+// route.params.pocket contains the pocket object passed from PocketDetailScreen
+// onRefreshInboxCount updates the tab badge after a delete (transactions move back to inbox)
 export default function EditPocketScreen({ route, navigation, onRefreshInboxCount }) {
   const { pocket } = route.params;
+
+  // Pre-fill all fields with the existing pocket's data
   const [name, setName] = useState(pocket.name);
   const [balance, setBalance] = useState(String(pocket.balance));
   const [selectedColor, setSelectedColor] = useState(pocket.color);
   const [loading, setLoading] = useState(false);
   const [includeInDist, setIncludeInDist] = useState(pocket.income_percent != null);
   const [incomePercent, setIncomePercent] = useState(pocket.income_percent != null ? String(pocket.income_percent) : '');
-  const [otherPockets, setOtherPockets] = useState([]);
-  const [transferAmounts, setTransferAmounts] = useState({});
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [deleteTransferAmounts, setDeleteTransferAmounts] = useState({});
 
+  // Other pockets — used both for transfer UI and delete distribution UI
+  const [otherPockets, setOtherPockets] = useState([]);
+  const [transferAmounts, setTransferAmounts] = useState({}); // Amounts for balance change transfers
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false); // Toggles the delete confirmation panel
+  const [deleteTransferAmounts, setDeleteTransferAmounts] = useState({}); // Amounts for delete distribution
+
+  // Load other pockets on mount (filtering out the current pocket)
   useEffect(() => {
     const load = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -33,42 +57,60 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
     load();
   }, []);
 
+  // ── Balance change calculations ────────────────────────────────────────────────
+
   const newBalance = parseFloat(balance) || 0;
-  const diff = newBalance - pocket.balance;
-  const needsTransfer = Math.abs(diff) >= 0.01;
-  const isAdding = diff > 0; // increasing this pocket → take from others
+  const diff = newBalance - pocket.balance; // Positive = adding funds, negative = removing funds
+  const needsTransfer = Math.abs(diff) >= 0.01; // Only require transfers if balance actually changed
+  const isAdding = diff > 0; // true = taking from other pockets, false = sending to other pockets
+
+  // Sum up the transfer amounts the user has entered
   const totalTransferred = Object.values(transferAmounts)
     .reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+
+  // Transfer is complete when the amounts sum to exactly the difference (within $0.01)
   const transferComplete = Math.abs(totalTransferred - Math.abs(diff)) < 0.01;
+
+  // Total available across all other pockets (used to check if we can add the requested amount)
   const totalAvailable = isAdding
     ? otherPockets.reduce((sum, p) => sum + p.balance, 0)
-    : Infinity;
+    : Infinity; // When removing, we're sending TO others, so there's no shortage concern
+
+  // True if the user wants to increase this pocket but other pockets don't have enough
   const insufficientFunds = isAdding && totalAvailable < diff;
 
+  // Reset transfer amounts when the balance changes (stale amounts may no longer be valid)
   const handleBalanceChange = (val) => {
     setBalance(val);
     setTransferAmounts({});
   };
 
+  // Validates the user's transfer input and enforces a cap to prevent over-allocation
   const updateTransferAmount = (pocketId, val, maxAllowed) => {
     const parsed = parseFloat(val) || 0;
+    // How much has already been allocated to OTHER pockets (not this one)
     const otherTotal = Object.entries(transferAmounts)
       .reduce((sum, [id, v]) => id !== pocketId ? sum + (parseFloat(v) || 0) : sum, 0);
+    // This pocket can receive at most: (total diff needed) - (what others already cover)
     let cap = Math.max(0, Math.abs(diff) - otherTotal);
-    if (maxAllowed !== null) cap = Math.min(cap, maxAllowed);
-    if (parsed > cap) val = String(Math.round(cap * 100) / 100);
+    if (maxAllowed !== null) cap = Math.min(cap, maxAllowed); // Also cap at pocket's available balance
+    if (parsed > cap) val = String(Math.round(cap * 100) / 100); // Clamp to max
     setTransferAmounts(prev => ({ ...prev, [pocketId]: val }));
   };
 
   const handleSave = async () => {
     setLoading(true);
     try {
+      // Convert transfer inputs into the format the API expects
       const transfers = Object.entries(transferAmounts)
         .filter(([, v]) => parseFloat(v) > 0)
         .map(([pocketId, v]) => ({
           pocketId,
-          amount: isAdding ? -parseFloat(v) : parseFloat(v), // negative = losing, positive = gaining
+          // Negative amount = that pocket loses money (we're taking FROM it to add here)
+          // Positive amount = that pocket gains money (we're sending TO it from here)
+          amount: isAdding ? -parseFloat(v) : parseFloat(v),
         }));
+
       await fetch(`${API_URL}/pockets/${pocket.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -77,7 +119,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
           balance: newBalance,
           color: selectedColor,
           income_percent: includeInDist ? (parseFloat(incomePercent) || null) : null,
-          transfers: needsTransfer ? transfers : undefined,
+          transfers: needsTransfer ? transfers : undefined, // Only send transfers if balance changed
         }),
       });
       navigation.navigate('Dashboard');
@@ -88,12 +130,18 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
     }
   };
 
-  const hasBalance = pocket.balance > 0;
+  // ── Delete flow ────────────────────────────────────────────────────────────────
+
+  const hasBalance = pocket.balance > 0; // If pocket has money, user must distribute it first
+
   const totalDeleteTransferred = Object.values(deleteTransferAmounts)
     .reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+
+  // Delete is confirmable when: no balance to distribute, OR all balance has been allocated
   const deleteTransferComplete = Math.abs(totalDeleteTransferred - pocket.balance) < 0.01;
   const canConfirmDelete = !hasBalance || deleteTransferComplete;
 
+  // Cap the delete transfer input to prevent over-allocating the pocket's balance
   const updateDeleteAmount = (pocketId, val) => {
     const parsed = parseFloat(val) || 0;
     const otherTotal = Object.entries(deleteTransferAmounts)
@@ -109,11 +157,14 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
       const transfers = Object.entries(deleteTransferAmounts)
         .filter(([, v]) => parseFloat(v) > 0)
         .map(([pocketId, v]) => ({ pocketId, amount: parseFloat(v) }));
+
       await fetch(`${API_URL}/pockets/${pocket.id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transfers }),
       });
+
+      // After deleting, transactions move back to inbox — refresh the badge count
       const { data: { session } } = await supabase.auth.getSession();
       onRefreshInboxCount?.(session?.user?.id);
       navigation.navigate('Dashboard');
@@ -124,6 +175,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
     }
   };
 
+  // Save is enabled when name is filled AND either no transfer needed OR transfer is complete
   const canSave = name.trim().length > 0 && (!needsTransfer || (transferComplete && !insufficientFunds)) && !loading;
 
   return (
@@ -141,6 +193,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
 
       <ScrollView showsVerticalScrollIndicator={false}>
 
+        {/* Live preview card */}
         <View style={styles.previewCard}>
           <View style={[styles.previewTopBar, { backgroundColor: selectedColor }]} />
           <Text style={styles.previewName}>{name || 'Pocket name'}</Text>
@@ -178,15 +231,16 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
             </View>
           </View>
 
-          {/* Transfer section — only shown when balance changed */}
+          {/* Transfer section — only shown when the balance has been changed */}
           {needsTransfer && (
             <View style={styles.inputGroup}>
               <Text style={styles.label}>
                 {isAdding
-                  ? `Take $${formatCurrency(Math.abs(diff))} from`
-                  : `Send $${formatCurrency(Math.abs(diff))} to`
+                  ? `Take $${formatCurrency(Math.abs(diff))} from` // Adding to pocket = take from others
+                  : `Send $${formatCurrency(Math.abs(diff))} to`   // Removing from pocket = send to others
                 }
               </Text>
+
               {insufficientFunds && (
                 <View style={styles.noTransferCard}>
                   <Text style={styles.noTransferText}>
@@ -194,6 +248,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
                   </Text>
                 </View>
               )}
+
               {otherPockets.length === 0 ? (
                 <View style={styles.noTransferCard}>
                   <Text style={styles.noTransferText}>No other pockets to take from.</Text>
@@ -201,8 +256,8 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
               ) : insufficientFunds ? null : (
                 <>
                   {otherPockets.map(p => {
-                    const maxAllowed = isAdding ? p.balance : null;
-                    const hasEnough = !isAdding || p.balance > 0;
+                    const maxAllowed = isAdding ? p.balance : null; // Can't take more than a pocket has
+                    const hasEnough = !isAdding || p.balance > 0;   // Dim pockets with $0
                     return (
                       <View key={p.id} style={[styles.pocketOption, !hasEnough && styles.pocketOptionDim]}>
                         <View style={[styles.pocketDot, { backgroundColor: p.color }]} />
@@ -215,7 +270,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
                             keyboardType="numeric"
                             placeholder="0"
                             placeholderTextColor="#4A5E78"
-                            editable={hasEnough}
+                            editable={hasEnough} // Disable input for empty pockets
                             value={transferAmounts[p.id] || ''}
                             onChangeText={v => updateTransferAmount(p.id, v, maxAllowed)}
                           />
@@ -223,10 +278,9 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
                       </View>
                     );
                   })}
+                  {/* Progress indicator */}
                   {transferComplete ? (
-                    <Text style={[styles.transferTotal, styles.transferTotalDone]}>
-                      Fully allocated
-                    </Text>
+                    <Text style={[styles.transferTotal, styles.transferTotalDone]}>Fully allocated</Text>
                   ) : (
                     <Text style={[styles.transferTotal, styles.transferTotalPending]}>
                       Remaining: ${formatCurrency(Math.abs(diff) - totalTransferred)}
@@ -290,6 +344,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
           }
         </TouchableOpacity>
 
+        {/* Delete section — shows a confirmation panel instead of immediately deleting */}
         {!showDeleteConfirm ? (
           <TouchableOpacity style={styles.deleteBtn} onPress={() => setShowDeleteConfirm(true)} activeOpacity={0.85}>
             <Text style={styles.deleteBtnText}>Delete Pocket</Text>
@@ -301,6 +356,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
               All transactions assigned to this pocket will return to your inbox.
             </Text>
 
+            {/* If the pocket has a balance, require the user to redistribute it first */}
             {hasBalance && (
               <>
                 <Text style={styles.deleteConfirmLabel}>
@@ -330,9 +386,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
                       </View>
                     ))}
                     {deleteTransferComplete ? (
-                      <Text style={[styles.transferTotal, styles.transferTotalDone]}>
-                        Fully allocated
-                      </Text>
+                      <Text style={[styles.transferTotal, styles.transferTotalDone]}>Fully allocated</Text>
                     ) : (
                       <Text style={[styles.transferTotal, styles.transferTotalPending]}>
                         Remaining: ${formatCurrency(pocket.balance - totalDeleteTransferred)}
@@ -343,6 +397,7 @@ export default function EditPocketScreen({ route, navigation, onRefreshInboxCoun
               </>
             )}
 
+            {/* Confirm delete — disabled until the balance is fully distributed */}
             <TouchableOpacity
               style={[styles.deleteConfirmBtn, !canConfirmDelete && styles.saveBtnDisabled]}
               onPress={confirmDelete}

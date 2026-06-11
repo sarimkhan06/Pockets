@@ -1,15 +1,28 @@
+// ConnectBankScreen.js — lets the user connect or reconnect their bank via Plaid.
+//
+// The Plaid connection flow has 3 steps:
+//   Step 1: Our backend creates a "link token" (a one-time session token) for this user
+//   Step 2: We use that token to launch the Plaid Link SDK — a native UI sheet that
+//           lets the user securely log into their bank (credentials never touch our server)
+//   Step 3: On success, Plaid gives us a short-lived "public token". We send it to our
+//           backend, which exchanges it for a permanent "access token" stored in Supabase.
+//
+// Once connected, Plaid can be called any time to pull the user's latest transactions.
+// This screen also has a "Sync Transactions" button for manual refreshes.
+
 import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
-import { create, open } from 'react-native-plaid-link-sdk';
+import { create, open } from 'react-native-plaid-link-sdk'; // Plaid's React Native SDK
 import { supabase } from '../lib/supabase';
 import { API_URL } from '../lib/config';
 
 export default function ConnectBankScreen({ navigation }) {
-  const [connected, setConnected] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(false);   // Whether this user has a Plaid connection
+  const [connecting, setConnecting] = useState(false); // Spinner while the Plaid flow is in progress
+  const [syncing, setSyncing] = useState(false);       // Spinner while pulling transactions
+  const [loading, setLoading] = useState(true);        // Initial status check
 
+  // Check if the user already has a connected bank on mount
   useEffect(() => {
     checkStatus();
   }, []);
@@ -19,6 +32,7 @@ export default function ConnectBankScreen({ navigation }) {
     return session?.user?.id;
   };
 
+  // Calls the backend to ask: "does this user have a Plaid access token saved?"
   const checkStatus = async () => {
     try {
       const userId = await getUserId();
@@ -37,7 +51,9 @@ export default function ConnectBankScreen({ navigation }) {
     try {
       const userId = await getUserId();
 
-      // Step 1: get a link token from our server
+      // Step 1: Ask our backend for a Plaid link token.
+      // The link token is generated server-side using our Plaid secret key —
+      // the frontend never has access to the secret key.
       const res = await fetch(`${API_URL}/plaid/create-link-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -46,13 +62,17 @@ export default function ConnectBankScreen({ navigation }) {
       const { link_token, error } = await res.json();
       if (error) throw new Error(error);
 
-      // Step 2: create initializes Plaid with the token, open launches the UI
+      // Step 2a: create() initializes the Plaid SDK with the token.
+      // Step 2b: open() launches the Plaid Link UI (a native bank login sheet).
+      // The user selects their bank and logs in — their credentials only go to Plaid, not us.
       create({ token: link_token });
 
       open({
         onSuccess: async (success) => {
+          // success.publicToken is the short-lived token Plaid gives us after a successful login
           try {
-            // Step 3: exchange the public token for a permanent access token
+            // Step 3: Exchange the public token for a permanent access token.
+            // Our backend stores this access token in Supabase — never sent to the frontend.
             const exchangeRes = await fetch(`${API_URL}/plaid/exchange-token`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -69,6 +89,7 @@ export default function ConnectBankScreen({ navigation }) {
           }
         },
         onExit: (exit) => {
+          // User closed the Plaid UI or an error occurred
           if (exit.error) {
             Alert.alert('Error', exit.error.display_message || 'Something went wrong. Please try again.');
           }
@@ -81,6 +102,7 @@ export default function ConnectBankScreen({ navigation }) {
     }
   };
 
+  // Tells the backend to ask Plaid for new transactions (since the last sync)
   const handleSync = async () => {
     setSyncing(true);
     try {
@@ -111,6 +133,7 @@ export default function ConnectBankScreen({ navigation }) {
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Hero section — icon + status text changes based on connection state */}
         <View style={styles.hero}>
           <View style={[styles.heroIcon, connected && styles.heroIconConnected]}>
             <Text style={styles.heroEmoji}>{connected ? '✓' : '🏦'}</Text>
@@ -126,6 +149,7 @@ export default function ConnectBankScreen({ navigation }) {
           </Text>
         </View>
 
+        {/* Feature list — only shown before connecting */}
         {!connected && (
           <View style={styles.featuresCard}>
             {[
@@ -144,10 +168,12 @@ export default function ConnectBankScreen({ navigation }) {
           </View>
         )}
 
+        {/* Loading / connected / not connected state buttons */}
         {loading ? (
           <ActivityIndicator color="#00D4AA" style={{ marginTop: 40 }} />
         ) : connected ? (
           <>
+            {/* Connected: show Sync button and option to connect a different bank */}
             <TouchableOpacity
               style={[styles.syncBtn, syncing && { opacity: 0.7 }]}
               onPress={handleSync}
@@ -168,6 +194,7 @@ export default function ConnectBankScreen({ navigation }) {
             </TouchableOpacity>
           </>
         ) : (
+          // Not connected: show the "Connect with Plaid" button
           <TouchableOpacity
             style={[styles.connectBtn, connecting && { opacity: 0.7 }]}
             onPress={handleConnect}
@@ -207,7 +234,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#151F32', alignItems: 'center', justifyContent: 'center',
     marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
-  heroIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' },
+  heroIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' }, // Green tint when connected
   heroEmoji: { fontSize: 36 },
   heroTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', marginBottom: 12 },
   heroSubtitle: { fontSize: 14, color: '#8899AA', textAlign: 'center', lineHeight: 22 },

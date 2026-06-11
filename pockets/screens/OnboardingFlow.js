@@ -1,3 +1,17 @@
+// OnboardingFlow.js — the multi-step setup experience for new users.
+//
+// This file defines 5 inner "step" components and one main orchestrator component.
+// Each step is a self-contained component that calls onComplete/onNext when done.
+// The orchestrator (OnboardingFlow) tracks which step is active and transitions between them.
+//
+// Step flow:
+//   New user:     template → bank → [setup if blank] → mfa → done
+//   Retake (change template): template → done (bank already connected, skip the rest)
+//
+// Why are steps separate components (not separate screens)?
+//   They share the same onboarding-specific styles and all live in a single
+//   animation-free flow. Separate screens would add unnecessary navigation stack entries.
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Alert,
@@ -10,11 +24,13 @@ import { TEMPLATES } from '../data/onboardingData';
 import { formatCurrency } from '../lib/utils';
 
 // ─── Step 1: Monthly income ───────────────────────────────────────────────────
+// NOTE: This step is defined but not currently in the active flow.
+// It was built for future use (auto-sizing pocket budgets based on income).
 
 function IncomeStep({ onNext }) {
   const [income, setIncome] = useState('');
   const parsed = parseFloat(income);
-  const canContinue = parsed > 0;
+  const canContinue = parsed > 0; // Disable "Next" until a positive number is entered
 
   return (
     <KeyboardAvoidingView
@@ -56,16 +72,24 @@ function IncomeStep({ onNext }) {
 }
 
 // ─── Step 2: Template selection ───────────────────────────────────────────────
+// User picks a budgeting method. On confirmation:
+//   1. Delete existing pockets (fresh start)
+//   2. Save the method ID to user-settings
+//   3. Create the template's default pockets (all at $0 balance)
+//   4. If retake, also initialize pocket balances from Plaid immediately
 
 function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(null); // The currently highlighted template
   const [saving, setSaving] = useState(false);
 
+  // Convert the TEMPLATES object into an array for rendering
   const templates = Object.values(TEMPLATES);
+
   const handleCreate = async () => {
     if (!selected) return;
     setSaving(true);
     try {
+      // Get the userId — from signUpUser prop (new user) or from active session (returning user)
       let userId = signUpUser?.id;
       if (!userId) {
         const { data: { session } } = await supabase.auth.getSession();
@@ -77,8 +101,11 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
       }
       if (!userId) throw new Error('Could not get your account info. Please log in again.');
 
+      // 1. Delete all existing pockets for this user (fresh start with the new template)
       await fetch(`${API_URL}/pockets/user/${userId}`, { method: 'DELETE' });
 
+      // 2. Save the chosen method to the database.
+      //    If it's a retake, also save the PREVIOUS method ID so a backup can be offered.
       await fetch(`${API_URL}/user-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -89,6 +116,7 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
         }),
       });
 
+      // 3. Create the template's default pockets (all start at $0 — bank funds them later)
       const pockets = selected.pockets().map(p => ({
         ...p,
         balance: 0,
@@ -103,6 +131,8 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
         });
       }
 
+      // 4. For retakes: the bank is already connected, so initialize balances immediately.
+      //    For new users: ConnectBankStep handles this after they link their bank.
       if (isRetake) {
         try {
           await fetch(`${API_URL}/plaid/initialize-pocket-balances`, {
@@ -110,7 +140,7 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId }),
           });
-        } catch (e) {}
+        } catch (e) {} // Non-fatal for retakes
       }
 
       onComplete({ method: selected });
@@ -132,13 +162,14 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
 
       <View style={styles.templateList}>
         {templates.map(t => {
-          const pockets = t.pockets();
+          const pockets = t.pockets(); // Call the function to get the pocket list
           const isSelected = selected?.id === t.id;
           return (
             <TouchableOpacity
               key={t.id}
               style={[
                 styles.templateCard,
+                // Highlight the card with the template's color when selected
                 isSelected && { borderColor: t.color, backgroundColor: '#0D1E2E' },
               ]}
               onPress={() => setSelected(t)}
@@ -150,11 +181,13 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
                   <Text style={styles.templateName}>{t.name}</Text>
                   <Text style={styles.templateDesc}>{t.description}</Text>
                 </View>
+                {/* Radio button — shows a dot when this template is selected */}
                 <View style={[styles.radio, isSelected && { borderColor: t.color }]}>
                   {isSelected && <View style={[styles.radioDot, { backgroundColor: t.color }]} />}
                 </View>
               </View>
 
+              {/* Preview the pockets this template would create */}
               {pockets.length > 0 && (
                 <View style={styles.pocketPreview}>
                   {pockets.map((p, i) => (
@@ -169,6 +202,7 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
                 </View>
               )}
 
+              {/* Blank template: no pockets to preview */}
               {pockets.length === 0 && (
                 <Text style={styles.blankNote}>You'll create your own pockets after setup.</Text>
               )}
@@ -195,19 +229,23 @@ function TemplateStep({ onComplete, signUpUser, isRetake, currentMethodId }) {
 }
 
 // ─── Step 3: Connect bank ─────────────────────────────────────────────────────
+// Same 3-step Plaid flow as ConnectBankScreen, but also:
+//   - Initializes pocket balances using the user's real bank balance
+//   - Auto-syncs transactions after connecting
 
 function ConnectBankStep({ signUpUser, onComplete }) {
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [bankBalance, setBankBalance] = useState(0);
+  const [bankBalance, setBankBalance] = useState(0); // Used to size pockets in the blank template
 
   const getUserId = async () => {
-    if (signUpUser?.id) return signUpUser.id;
+    if (signUpUser?.id) return signUpUser.id; // Prefer the signUpUser from the fresh sign-up
     const { data: { session } } = await supabase.auth.getSession();
     return session?.user?.id;
   };
 
+  // Pull transactions after connecting — non-fatal if it fails, user can sync manually
   const syncTransactions = async (userId) => {
     setSyncing(true);
     try {
@@ -227,6 +265,8 @@ function ConnectBankStep({ signUpUser, onComplete }) {
     setConnecting(true);
     try {
       const userId = await getUserId();
+
+      // Step 1: Create a link token from our backend
       const res = await fetch(`${API_URL}/plaid/create-link-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -235,10 +275,12 @@ function ConnectBankStep({ signUpUser, onComplete }) {
       const { link_token, error } = await res.json();
       if (error) throw new Error(error);
 
+      // Step 2: Launch the Plaid Link native UI
       create({ token: link_token });
       open({
         onSuccess: async (success) => {
           try {
+            // Step 3: Exchange the public token for a permanent access token
             const exchangeRes = await fetch(`${API_URL}/plaid/exchange-token`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -247,7 +289,8 @@ function ConnectBankStep({ signUpUser, onComplete }) {
             const exchangeData = await exchangeRes.json();
             if (exchangeData.error) throw new Error(exchangeData.error);
 
-            // Fill pockets with the user's real bank balance before syncing transactions
+            // Initialize pocket balances from the real bank total balance.
+            // This splits the account balance proportionally across pockets using income_percent.
             const initRes = await fetch(`${API_URL}/plaid/initialize-pocket-balances`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -258,7 +301,7 @@ function ConnectBankStep({ signUpUser, onComplete }) {
 
             setBankBalance(initData.totalBalance || 0);
             setConnected(true);
-            await syncTransactions(userId);
+            await syncTransactions(userId); // Pull initial transaction history
           } catch (e) {
             Alert.alert('Error', e.message || 'Failed to save bank connection');
           } finally {
@@ -294,6 +337,7 @@ function ConnectBankStep({ signUpUser, onComplete }) {
         </Text>
       </View>
 
+      {/* Bank connection status icon */}
       <View style={styles.bankHero}>
         <View style={[styles.bankIcon, connected && styles.bankIconConnected]}>
           <Text style={styles.bankEmoji}>{connected ? '✓' : '🏦'}</Text>
@@ -305,6 +349,7 @@ function ConnectBankStep({ signUpUser, onComplete }) {
         )}
       </View>
 
+      {/* Feature list — hidden once connected */}
       {!connected && (
         <View style={styles.featuresCard}>
           {features.map((f, i) => (
@@ -321,6 +366,8 @@ function ConnectBankStep({ signUpUser, onComplete }) {
 
       <View style={styles.bankFooter}>
         {connected ? (
+          // After connecting, pass bankBalance to the orchestrator so it knows
+          // whether to show SetupPocketsStep (blank template needs manual setup)
           <TouchableOpacity
             style={[styles.btn, styles.bankContinueBtn, syncing && styles.btnDisabled]}
             onPress={() => onComplete(bankBalance)}
@@ -355,18 +402,25 @@ function ConnectBankStep({ signUpUser, onComplete }) {
 }
 
 // ─── Step 4: Set up custom pockets (blank template only) ─────────────────────
+// Only shown when the user chose "Start Blank" AND has a bank balance > $0.
+// The user divides their entire bank balance across custom-named pockets.
+// The "Done" button is only enabled when the remaining balance hits exactly $0.
 
 const POCKET_COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
 function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
+  // Each row represents one pocket-to-be: { id, name, amount, color }
   const [rows, setRows] = useState([
     { id: 1, name: '', amount: '', color: POCKET_COLORS[0] },
   ]);
   const [saving, setSaving] = useState(false);
 
+  // How much of the bank balance has been allocated across all rows
   const totalAllocated = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+  // How much still needs to be assigned ($0 = ready to submit)
   const remaining = Math.round((bankBalance - totalAllocated) * 100) / 100;
 
+  // Add a new row with the next color in the cycle
   const addRow = () => {
     const color = POCKET_COLORS[rows.length % POCKET_COLORS.length];
     setRows(prev => [...prev, { id: Date.now(), name: '', amount: '', color }]);
@@ -374,17 +428,21 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
 
   const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
 
+  // Update a specific field on a specific row.
+  // For 'amount', enforce a cap so the user can't allocate more than they have.
   const updateRow = (id, field, value) => {
     if (field === 'amount') {
+      // Sum of all OTHER rows' amounts (not this one)
       const otherTotal = rows.reduce((sum, r) => r.id !== id ? sum + (parseFloat(r.amount) || 0) : sum, 0);
-      const max = Math.max(0, bankBalance - otherTotal);
+      const max = Math.max(0, bankBalance - otherTotal); // Max this row can take
       const parsed = parseFloat(value) || 0;
-      if (parsed > max) value = String(Math.round(max * 100) / 100);
+      if (parsed > max) value = String(Math.round(max * 100) / 100); // Clamp
     }
     setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   };
 
   const handleDone = async () => {
+    // Only save rows that have both a name and a positive amount
     const valid = rows.filter(r => r.name.trim() && parseFloat(r.amount) > 0);
     if (valid.length === 0) {
       Alert.alert('Add at least one pocket', 'Give it a name and an amount.');
@@ -397,6 +455,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
         const { data: { session } } = await supabase.auth.getSession();
         userId = session?.user?.id;
       }
+      // Save all the new pockets in one batch API call
       await fetch(`${API_URL}/pockets/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -405,7 +464,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
             name: r.name.trim(),
             balance: parseFloat(r.amount),
             color: r.color,
-            income_percent: null,
+            income_percent: null, // Blank template: no income distribution by default
             user_id: userId,
           })),
         }),
@@ -417,6 +476,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
     }
   };
 
+  // "Done" is only enabled when remaining === 0 AND at least one valid row exists
   const canDone = remaining === 0 && rows.some(r => r.name.trim() && parseFloat(r.amount) > 0) && !saving;
 
   return (
@@ -429,6 +489,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
         </Text>
       </View>
 
+      {/* Live "remaining" counter — turns green at $0 */}
       <View style={styles.remainingCard}>
         <Text style={styles.remainingLabel}>Remaining to allocate</Text>
         <Text style={styles.remainingAmount}>
@@ -436,6 +497,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
         </Text>
       </View>
 
+      {/* Editable rows: one per pocket-to-be */}
       <View style={styles.setupList}>
         {rows.map((r) => (
           <View key={r.id} style={styles.setupRow}>
@@ -456,6 +518,7 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
               value={r.amount}
               onChangeText={v => updateRow(r.id, 'amount', v)}
             />
+            {/* × button — only shown when there's more than one row */}
             {rows.length > 1 && (
               <TouchableOpacity onPress={() => removeRow(r.id)} style={styles.setupRemove}>
                 <Text style={styles.setupRemoveText}>×</Text>
@@ -489,6 +552,8 @@ function SetupPocketsStep({ bankBalance, signUpUser, onComplete }) {
 }
 
 // ─── Step 5: Set up 2FA ───────────────────────────────────────────────────────
+// Strongly encouraged after bank connection since the account now contains financial data.
+// Same logic as MFASetupScreen — enrolls a TOTP factor and verifies it with a code.
 
 function MFAStep({ onComplete }) {
   const [loading, setLoading] = useState(true);
@@ -497,6 +562,7 @@ function MFAStep({ onComplete }) {
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
 
+  // Enroll immediately on mount so the secret is ready when the screen renders
   useEffect(() => {
     const enroll = async () => {
       try {
@@ -505,6 +571,7 @@ function MFAStep({ onComplete }) {
         setSecret(data.totp.secret);
         setFactorId(data.id);
       } catch (e) {
+        // If enrollment fails (e.g., factor already exists), skip 2FA setup
         Alert.alert('Error', e.message || 'Failed to set up 2FA. You can enable it later in Settings.');
         onComplete();
       } finally {
@@ -520,7 +587,7 @@ function MFAStep({ onComplete }) {
     try {
       const { error } = await supabase.auth.mfa.challengeAndVerify({ factorId, code });
       if (error) throw error;
-      onComplete();
+      onComplete(); // 2FA verified — finish onboarding
     } catch (e) {
       Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
       setCode('');
@@ -551,6 +618,7 @@ function MFAStep({ onComplete }) {
           </Text>
         </View>
 
+        {/* Warning card — amber color to convey urgency without being alarming */}
         <View style={styles.mfaWarningCard}>
           <Text style={styles.mfaWarningText}>
             🔒 Highly recommended — your account contains sensitive financial data. Skipping this puts your account at risk.
@@ -563,6 +631,7 @@ function MFAStep({ onComplete }) {
           </Text>
         </View>
 
+        {/* The secret key — selectable so user can copy it */}
         <View style={styles.mfaSecretCard}>
           <Text style={styles.mfaSecretLabel}>Setup key — tap and hold to copy</Text>
           <Text style={styles.mfaSecretKey} selectable>{secret}</Text>
@@ -602,33 +671,43 @@ function MFAStep({ onComplete }) {
   );
 }
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Main orchestrator ────────────────────────────────────────────────────────
+// Controls which step is active and handles transitions between them.
+// All step components only know about their own onComplete/onNext callback —
+// they don't know what comes next. This component decides that.
 
 export default function OnboardingFlow({ onComplete, signUpUser, isRetake, currentMethodId, onCancel }) {
+  // The current step in the flow
   const [step, setStep] = useState('template'); // 'template' | 'bank' | 'setup' | 'mfa'
   const [selectedMethod, setSelectedMethod] = useState(null);
-  const [bankBalance, setBankBalance] = useState(0);
+  const [bankBalance, setBankBalance] = useState(0); // Passed to SetupPocketsStep
 
+  // Called when TemplateStep completes
   const handleTemplateComplete = ({ method }) => {
     setSelectedMethod(method);
     if (isRetake) {
+      // Retake: bank already connected, skip to done
       onComplete({ method });
     } else {
-      setStep('bank');
+      setStep('bank'); // New user: go to bank connection
     }
   };
 
+  // Called when ConnectBankStep completes (receives the user's total bank balance)
   const handleBankComplete = (balance) => {
     if (selectedMethod?.id === 'blank' && balance > 0) {
+      // Blank template: user needs to manually divide their balance into pockets
       setBankBalance(balance);
       setStep('setup');
     } else {
+      // Pre-built template: pockets already created with income_percent → skip to MFA
       setStep('mfa');
     }
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0B1120' }}>
+      {/* Render only the active step */}
       {step === 'template' && (
         <TemplateStep
           onComplete={handleTemplateComplete}
@@ -647,12 +726,13 @@ export default function OnboardingFlow({ onComplete, signUpUser, isRetake, curre
         <SetupPocketsStep
           bankBalance={bankBalance}
           signUpUser={signUpUser}
-          onComplete={() => setStep('mfa')}
+          onComplete={() => setStep('mfa')} // After manual setup, go to 2FA
         />
       )}
       {step === 'mfa' && (
         <MFAStep onComplete={() => onComplete({ method: selectedMethod })} />
       )}
+      {/* Cancel button — only shown for retakes (not new users), and only on the first step */}
       {onCancel && step === 'template' && (
         <TouchableOpacity style={styles.cancelBtn} onPress={onCancel} activeOpacity={0.7}>
           <Text style={styles.cancelBtnText}>✕</Text>
@@ -662,8 +742,7 @@ export default function OnboardingFlow({ onComplete, signUpUser, isRetake, curre
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
+// ─── Shared styles (used across all step components in this file) ─────────────
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0B1120' },
 
@@ -728,7 +807,6 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: { fontSize: 14, color: '#8899AA', fontWeight: '600' },
 
-  // ConnectBankStep styles
   bankHero: { alignItems: 'center', paddingVertical: 24 },
   bankIcon: {
     width: 80, height: 80, borderRadius: 40,
@@ -755,7 +833,6 @@ const styles = StyleSheet.create({
   skipBtn: { paddingVertical: 16, alignItems: 'center' },
   skipText: { fontSize: 14, color: '#4A5E78', fontWeight: '500' },
 
-  // SetupPocketsStep styles
   remainingCard: {
     marginHorizontal: 24, backgroundColor: '#151F32', borderRadius: 16,
     padding: 18, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',

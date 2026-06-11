@@ -1,3 +1,19 @@
+// AddPocketScreen.js — lets the user create a new pocket.
+//
+// Key concept — funding sources:
+//   A pocket's starting balance can't come from thin air. If the user sets a
+//   starting balance > $0, they must specify which existing pockets to take money FROM.
+//   The backend then deducts those amounts from the source pockets and adds them to the new one.
+//
+//   Example: Creating "Emergency Fund" with $200
+//     → Take $150 from "Groceries" and $50 from "Fun"
+//     → The form requires the source amounts to exactly equal the new pocket's balance.
+//
+// Income distribution:
+//   The "Include in income split" toggle + percentage field sets income_percent on the pocket.
+//   When a paycheck arrives in the Inbox and the user chooses "By method",
+//   this percentage determines how much of the income goes into this pocket.
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Switch,
@@ -8,18 +24,20 @@ import { API_URL } from '../lib/config';
 import { supabase } from '../lib/supabase';
 import { formatCurrency } from '../lib/utils';
 
+// 8 preset colors the user can pick from
 const COLORS = ['#00D4AA', '#FF5252', '#448AFF', '#FF9F43', '#B39DDB', '#FF6B9D', '#00BCD4', '#8BC34A'];
 
 export default function AddPocketScreen({ navigation }) {
   const [name, setName] = useState('');
-  const [balance, setBalance] = useState('');
+  const [balance, setBalance] = useState('');       // String because TextInput values are strings
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
   const [loading, setLoading] = useState(false);
-  const [includeInDist, setIncludeInDist] = useState(false);
-  const [incomePercent, setIncomePercent] = useState('');
-  const [pockets, setPockets] = useState([]);
-  const [sourceAmounts, setSourceAmounts] = useState({});
+  const [includeInDist, setIncludeInDist] = useState(false); // Whether this pocket joins income splits
+  const [incomePercent, setIncomePercent] = useState('');     // e.g., "20" for 20%
+  const [pockets, setPockets] = useState([]);        // Other pockets to use as funding sources
+  const [sourceAmounts, setSourceAmounts] = useState({}); // { pocketId: '50.00', ... }
 
+  // Load existing pockets on mount — used to build the "Fund from" section
   useEffect(() => {
     const loadPockets = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -28,14 +46,20 @@ export default function AddPocketScreen({ navigation }) {
       setPockets(Array.isArray(data) ? data : []);
     };
     loadPockets();
-  }, []);
+  }, []); // [] = run once when this screen mounts
 
   const parsedBalance = parseFloat(balance) || 0;
-  const needsSource = parsedBalance > 0;
-  const fundablePockets = pockets.filter(p => p.balance > 0);
+  const needsSource = parsedBalance > 0; // Only show the "Fund from" section if balance > $0
+  const fundablePockets = pockets.filter(p => p.balance > 0); // Only pockets with funds can be sources
+
+  // Sum up how much the user has allocated across all source pockets
   const totalFunded = Object.values(sourceAmounts).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+
+  // Valid when the allocated total exactly equals the new pocket's balance (within $0.01 for float math)
   const isFundingComplete = !needsSource || Math.abs(totalFunded - parsedBalance) < 0.01;
 
+  // Reset source allocations whenever the balance changes
+  // (the previously entered sources might no longer sum to the new balance)
   const handleBalanceChange = (val) => {
     setBalance(val);
     setSourceAmounts({});
@@ -46,9 +70,13 @@ export default function AddPocketScreen({ navigation }) {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const userId = session?.user?.id;
+
+      // Convert the sourceAmounts object into the array format the API expects:
+      //   [{ pocketId: 'abc', amount: 50 }, { pocketId: 'xyz', amount: 150 }]
       const sources = Object.entries(sourceAmounts)
-        .filter(([, v]) => parseFloat(v) > 0)
+        .filter(([, v]) => parseFloat(v) > 0)  // Skip any pockets with $0 entered
         .map(([pocketId, v]) => ({ pocketId, amount: parseFloat(v) }));
+
       const res = await fetch(`${API_URL}/pockets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,15 +84,17 @@ export default function AddPocketScreen({ navigation }) {
           name,
           balance: parsedBalance,
           color: selectedColor,
+          // Only send income_percent if the toggle is on AND a value was entered
           income_percent: includeInDist ? (parseFloat(incomePercent) || null) : null,
           userId,
-          sources: needsSource ? sources : undefined,
+          sources: needsSource ? sources : undefined, // Don't send sources if balance is $0
         }),
       });
       const data = await res.json();
       if (data.error) {
         Alert.alert('Error', data.error);
       } else {
+        // Success — go back to the Dashboard where the new pocket will appear
         navigation.navigate('Dashboard');
       }
     } catch (error) {
@@ -74,6 +104,7 @@ export default function AddPocketScreen({ navigation }) {
     }
   };
 
+  // The save button is only enabled when we have a name AND the funding is complete
   const canSave = name.trim().length > 0 && isFundingComplete && !loading;
 
   return (
@@ -92,7 +123,7 @@ export default function AddPocketScreen({ navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false}>
 
-        {/* Preview card */}
+        {/* Live preview card — updates in real time as the user types */}
         <View style={styles.previewCard}>
           <View style={[styles.previewTopBar, { backgroundColor: selectedColor }]} />
           <Text style={styles.previewName}>{name || 'Pocket name'}</Text>
@@ -102,7 +133,7 @@ export default function AddPocketScreen({ navigation }) {
           <Text style={styles.previewLabel}>budget</Text>
         </View>
 
-        {/* Form */}
+        {/* Form fields */}
         <View style={styles.form}>
 
           <View style={styles.inputGroup}>
@@ -131,11 +162,12 @@ export default function AddPocketScreen({ navigation }) {
             </View>
           </View>
 
-          {/* Fund from — only shown when balance > 0 */}
+          {/* "Fund from" section — only appears when balance > $0 */}
           {needsSource && (
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Fund from</Text>
               {fundablePockets.length === 0 ? (
+                // No pockets have money to give — show a message
                 <View style={styles.noFundCard}>
                   <Text style={styles.noFundText}>
                     No pockets have funds available. Add money to an existing pocket first.
@@ -143,6 +175,7 @@ export default function AddPocketScreen({ navigation }) {
                 </View>
               ) : (
                 <>
+                  {/* Each existing pocket gets a row with a dollar input */}
                   {fundablePockets.map(p => (
                     <View key={p.id} style={styles.pocketOption}>
                       <View style={[styles.pocketDot, { backgroundColor: p.color }]} />
@@ -156,11 +189,13 @@ export default function AddPocketScreen({ navigation }) {
                           placeholder="0"
                           placeholderTextColor="#4A5E78"
                           value={sourceAmounts[p.id] || ''}
+                          // Update just this pocket's amount, keep others untouched
                           onChangeText={v => setSourceAmounts(prev => ({ ...prev, [p.id]: v }))}
                         />
                       </View>
                     </View>
                   ))}
+                  {/* Progress indicator: shows how much has been allocated vs the target */}
                   <Text style={[
                     styles.fundingTotal,
                     isFundingComplete ? styles.fundingTotalComplete : styles.fundingTotalIncomplete,
@@ -175,23 +210,31 @@ export default function AddPocketScreen({ navigation }) {
             </View>
           )}
 
+          {/* Color picker — 8 color dots */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Color</Text>
             <View style={styles.colorRow}>
               {COLORS.map(color => (
                 <TouchableOpacity
                   key={color}
-                  style={[styles.colorDot, { backgroundColor: color }, selectedColor === color && styles.colorDotSelected]}
+                  style={[
+                    styles.colorDot,
+                    { backgroundColor: color },
+                    // White border ring on the selected color
+                    selectedColor === color && styles.colorDotSelected,
+                  ]}
                   onPress={() => setSelectedColor(color)}
                 />
               ))}
             </View>
           </View>
 
+          {/* Income distribution toggle */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Income Distribution</Text>
             <View style={styles.toggleRow}>
               <Text style={styles.toggleLabel}>Include in income split</Text>
+              {/* Switch is a built-in React Native toggle component */}
               <Switch
                 value={includeInDist}
                 onValueChange={setIncludeInDist}
@@ -199,6 +242,7 @@ export default function AddPocketScreen({ navigation }) {
                 thumbColor={includeInDist ? '#00D4AA' : '#4A5E78'}
               />
             </View>
+            {/* Percentage input only appears when the toggle is on */}
             {includeInDist && (
               <View style={[styles.amountRow, { marginTop: 10 }]}>
                 <TextInput
@@ -247,7 +291,7 @@ const styles = StyleSheet.create({
   },
   backText: { fontSize: 20, color: '#FFFFFF' },
   headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '700', color: '#FFFFFF' },
-  headerSpacer: { width: 38 },
+  headerSpacer: { width: 38 }, // Balances the back button so the title stays centered
 
   previewCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 20,

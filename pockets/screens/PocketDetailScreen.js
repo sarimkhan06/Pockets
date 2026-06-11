@@ -1,3 +1,13 @@
+// PocketDetailScreen.js — shows the balance and transaction history for a single pocket.
+//
+// This screen receives the pocket object via navigation params (route.params.pocket).
+// When you tap a pocket card on Dashboard, it calls:
+//   navigation.navigate('PocketDetail', { pocket })
+// and this screen accesses it via:
+//   const { pocket } = route.params;
+//
+// Transactions are fetched from the backend filtered by this specific pocket's ID.
+
 import { useState, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
@@ -5,18 +15,23 @@ import { useFocusEffect } from '@react-navigation/native';
 import { API_URL } from '../lib/config';
 import { formatDate, formatCurrency } from '../lib/utils';
 
+// route.params contains the data passed via navigation.navigate('PocketDetail', { pocket })
+// navigation is used for goBack() and navigate('EditPocket', ...)
 export default function PocketDetailScreen({ route, navigation }) {
-  const { pocket } = route.params;
+  const { pocket } = route.params; // The pocket object passed from DashboardScreen
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Re-fetch when the screen regains focus — e.g., after editing this pocket
   useFocusEffect(
     useCallback(() => {
       const loadTransactions = async () => {
         setLoading(true);
         try {
+          // Fetch only transactions that belong to this specific pocket
           const res = await fetch(`${API_URL}/transactions/pocket/${pocket.id}`);
           const data = await res.json();
+          // .reverse() shows the most recent first (the backend returns oldest first)
           setTransactions([...data].reverse());
         } catch (error) {
           console.error('Failed to load transactions:', error);
@@ -26,18 +41,19 @@ export default function PocketDetailScreen({ route, navigation }) {
       };
 
       loadTransactions();
-    }, [pocket.id])
+    }, [pocket.id]) // Re-run if we somehow navigate to a different pocket's detail screen
   );
 
   return (
     <View style={styles.container}>
 
-      {/* Header */}
+      {/* Header: back button, pocket name, edit button */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{pocket.name}</Text>
+        {/* Navigate to EditPocket, passing the pocket object as a param */}
         <TouchableOpacity
           style={styles.editBtn}
           onPress={() => navigation.navigate('EditPocket', { pocket })}
@@ -48,18 +64,20 @@ export default function PocketDetailScreen({ route, navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false}>
 
-        {/* Pocket summary card */}
+        {/* Balance card — the thick top border uses the pocket's color as an accent */}
         <View style={[styles.summaryCard, { borderTopColor: pocket.color }]}>
           <Text style={styles.summaryLabel}>Available</Text>
+          {/* Balance turns red if at $0 or negative */}
           <Text style={[styles.summaryAmount, pocket.balance <= 0 && styles.summaryDepleted]}>
             ${formatCurrency(pocket.balance)}
           </Text>
         </View>
 
-        {/* Transactions */}
+        {/* Transactions header with a count badge */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Transactions</Text>
           {!loading && (
+            // Badge background uses the pocket color at 13% opacity (hex '22')
             <View style={[styles.badge, { backgroundColor: pocket.color + '22' }]}>
               <Text style={[styles.badgeText, { color: pocket.color }]}>
                 {transactions.length}
@@ -68,6 +86,7 @@ export default function PocketDetailScreen({ route, navigation }) {
           )}
         </View>
 
+        {/* Show spinner, empty state, or transaction list */}
         {loading ? (
           <ActivityIndicator color="#00D4AA" style={{ marginTop: 40 }} />
         ) : transactions.length === 0 ? (
@@ -125,7 +144,8 @@ const styles = StyleSheet.create({
   summaryCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 20,
     padding: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
-    borderTopWidth: 4, marginBottom: 8,
+    borderTopWidth: 4, // The thick accent border at the top
+    marginBottom: 8,
   },
   summaryLabel: { fontSize: 13, color: '#8899AA', marginBottom: 6 },
   summaryAmount: { fontSize: 42, fontWeight: '800', color: '#FFFFFF', letterSpacing: -1, marginBottom: 16 },

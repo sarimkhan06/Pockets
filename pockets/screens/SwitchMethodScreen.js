@@ -1,7 +1,16 @@
+// SwitchMethodScreen.js — displays all available budgeting templates for reference.
+//
+// This screen is currently READ-ONLY — it shows the methods but doesn't let the user
+// switch from here. Actual template switching happens through SettingsScreen → "Change Template"
+// which routes through OnboardingFlow.
+//
+// The current method (if known) gets a "Current" badge.
+
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { TEMPLATES } from '../data/onboardingData';
 
 export default function SwitchMethodScreen({ navigation, route }) {
+  // currentMethodId might be passed as a navigation param so we can badge the active method
   const currentMethodId = route.params?.currentMethodId;
 
   return (
@@ -19,13 +28,14 @@ export default function SwitchMethodScreen({ navigation, route }) {
           Switching methods will update your starter pockets. Any pockets you've added won't be affected.
         </Text>
 
+        {/* Object.values(TEMPLATES) converts the TEMPLATES object into an array for .map() */}
         {Object.values(TEMPLATES).map(method => {
           const isActive = method.id === currentMethodId;
           return (
             <TouchableOpacity
               key={method.id}
-              style={[styles.card, isActive && styles.cardActive]}
-              onPress={() => navigation.goBack()}
+              style={[styles.card, isActive && styles.cardActive]} // Green border on active method
+              onPress={() => navigation.goBack()} // Tapping just closes the screen (read-only)
               activeOpacity={0.8}
             >
               <View style={styles.cardLeft}>
@@ -33,6 +43,7 @@ export default function SwitchMethodScreen({ navigation, route }) {
                 <View style={styles.cardText}>
                   <View style={styles.cardTitleRow}>
                     <Text style={styles.cardName}>{method.name}</Text>
+                    {/* "Current" badge — background uses the method's color at 13% opacity */}
                     {isActive && (
                       <View style={[styles.activeBadge, { backgroundColor: method.color + '22' }]}>
                         <Text style={[styles.activeBadgeText, { color: method.color }]}>Current</Text>
@@ -42,6 +53,7 @@ export default function SwitchMethodScreen({ navigation, route }) {
                   <Text style={styles.cardTagline}>{method.tagline}</Text>
                 </View>
               </View>
+              {/* Vertical color bar on the right edge of each card */}
               <View style={[styles.colorBar, { backgroundColor: method.color }]} />
             </TouchableOpacity>
           );
@@ -78,7 +90,7 @@ const styles = StyleSheet.create({
     marginBottom: 10, overflow: 'hidden',
     flexDirection: 'row', alignItems: 'center',
   },
-  cardActive: { borderColor: '#00D4AA' },
+  cardActive: { borderColor: '#00D4AA' }, // Green border highlight for active method
   cardLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', padding: 16 },
   cardIcon: { fontSize: 28, marginRight: 14 },
   cardText: { flex: 1 },
@@ -87,5 +99,5 @@ const styles = StyleSheet.create({
   activeBadge: { borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
   activeBadgeText: { fontSize: 11, fontWeight: '700' },
   cardTagline: { fontSize: 12, color: '#8899AA' },
-  colorBar: { width: 4, alignSelf: 'stretch' },
+  colorBar: { width: 4, alignSelf: 'stretch' }, // Thin vertical accent bar on the right
 });
