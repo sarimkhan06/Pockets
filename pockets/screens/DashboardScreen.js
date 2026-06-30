@@ -25,6 +25,13 @@ import { supabase } from '../lib/supabase';
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - 48) / 2; // 48 = 20 left padding + 20 right padding + 8 gap
 
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning 👋';
+  if (hour < 17) return 'Good afternoon 👋';
+  return 'Good evening 👋';
+}
+
 // navigation is automatically passed by React Navigation to any screen component.
 // It lets you call navigation.navigate('ScreenName') or navigation.goBack().
 export default function DashboardScreen({ navigation }) {
@@ -67,7 +74,7 @@ export default function DashboardScreen({ navigation }) {
     };
 
     loadData();
-  }, [])) // Empty array: recreate the callback only once (on mount)
+  }, []) // Empty array: recreate the callback only once (on mount)
   );
 
   // Show a centered spinner while data is loading
@@ -79,41 +86,37 @@ export default function DashboardScreen({ navigation }) {
     );
   }
 
-  // .reduce() iterates over the pockets array and accumulates a running total.
-  // sum starts at 0, and each iteration adds p.balance to it.
+  const unsortedPocket = pockets.find(p => p.is_unsorted);
+  const namedPockets = pockets.filter(p => !p.is_unsorted);
+
+  // Total = sum of all pockets including Unsorted, which always equals the live bank balance
   const totalBalance = pockets.reduce((sum, p) => sum + p.balance, 0);
 
-  // Sort all transactions newest-first, then take only the first 4
   const recentTransactions = sortTxNewestFirst(transactions).slice(0, 4);
 
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
 
-        {/* Header row: avatar on the right, app name in the center */}
         <View style={styles.header}>
-          <View style={styles.headerSpacer} /> {/* Invisible spacer to balance the avatar */}
+          <View style={styles.headerSpacer} />
           <View style={styles.headerCenter}>
-            <Text style={styles.greeting}>Good morning 👋</Text>
+            <Text style={styles.greeting}>{getGreeting()}</Text>
             <Text style={styles.appName}>Pockets</Text>
           </View>
-          {/* Avatar circle showing the first letter of the user's name */}
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{userName ? userName[0].toUpperCase() : '?'}</Text>
           </View>
         </View>
 
-        {/* Total balance card */}
         <View style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>Total Balance</Text>
           <Text style={styles.balanceAmount}>${formatCurrency(totalBalance)}</Text>
           <Text style={styles.balanceNote}>
-            {/* Pluralize "pocket" correctly: "1 pocket" vs "3 pockets" */}
-            across {pockets.length} pocket{pockets.length !== 1 ? 's' : ''}
+            across {namedPockets.length} pocket{namedPockets.length !== 1 ? 's' : ''}
           </Text>
         </View>
 
-        {/* Section header: "My Pockets" title + "+ New" button */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>My Pockets</Text>
           <TouchableOpacity onPress={() => navigation.navigate('AddPocket')}>
@@ -121,8 +124,7 @@ export default function DashboardScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* If no pockets exist, show a dashed "create your first pocket" card instead of the grid */}
-        {pockets.length === 0 ? (
+        {namedPockets.length === 0 ? (
           <TouchableOpacity
             style={styles.emptyPockets}
             onPress={() => navigation.navigate('AddPocket')}
@@ -133,21 +135,16 @@ export default function DashboardScreen({ navigation }) {
             <Text style={styles.emptyPocketsSub}>Tap to add a spending envelope</Text>
           </TouchableOpacity>
         ) : (
-          // 2-column grid of pocket cards
           <View style={styles.grid}>
-            {pockets.map(pocket => (
-              // Tapping a pocket card navigates to PocketDetail, passing the pocket object as a param.
-              // The receiving screen accesses it via route.params.pocket
+            {namedPockets.map(pocket => (
               <TouchableOpacity
-                key={pocket.id} // React needs a unique key for each item in a list
+                key={pocket.id}
                 style={styles.card}
                 activeOpacity={0.8}
                 onPress={() => navigation.navigate('PocketDetail', { pocket })}
               >
-                {/* The colored bar at the top matches the pocket's chosen color */}
                 <View style={[styles.cardTopBar, { backgroundColor: pocket.color }]} />
                 <Text style={styles.cardName}>{pocket.name}</Text>
-                {/* Balance turns red if the pocket is at $0 or negative */}
                 <Text style={[styles.cardBalance, pocket.balance <= 0 && styles.cardDepleted]}>
                   ${formatCurrency(pocket.balance)}
                 </Text>
@@ -157,10 +154,25 @@ export default function DashboardScreen({ navigation }) {
           </View>
         )}
 
-        {/* Recent Transactions section */}
+        {/* Unsorted pocket — only shown when non-zero. Signals unassigned transactions. */}
+        {unsortedPocket && unsortedPocket.balance !== 0 && (
+          <View style={styles.unsortedCard}>
+            <View style={styles.unsortedLeft}>
+              <Text style={styles.unsortedLabel}>Unsorted</Text>
+              <Text style={styles.unsortedSub}>
+                {unsortedPocket.balance < 0
+                  ? 'A transaction is on its way through Plaid — assign it once it appears in your inbox'
+                  : 'Income or a deposit is making its way through Plaid'}
+              </Text>
+            </View>
+            <Text style={[styles.unsortedAmount, { color: unsortedPocket.balance < 0 ? '#FF5252' : '#00D4AA' }]}>
+              {unsortedPocket.balance < 0 ? '-' : '+'}${formatCurrency(Math.abs(unsortedPocket.balance))}
+            </Text>
+          </View>
+        )}
+
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Transactions</Text>
-          {/* "See all" navigates to the Transactions tab */}
           <TouchableOpacity onPress={() => navigation.navigate('Transactions')}>
             <Text style={styles.sectionAction}>See all</Text>
           </TouchableOpacity>
@@ -170,10 +182,8 @@ export default function DashboardScreen({ navigation }) {
           {recentTransactions.map((tx, index) => (
             <View
               key={tx.id}
-              // Add a bottom border to all rows except the last one
               style={[styles.txRow, index < recentTransactions.length - 1 && styles.txBorder]}
             >
-              {/* Circular emoji icon */}
               <View style={styles.txIcon}>
                 <Text style={styles.txEmoji}>{tx.icon}</Text>
               </View>
@@ -181,7 +191,6 @@ export default function DashboardScreen({ navigation }) {
                 <Text style={styles.txMerchant}>{tx.merchant}</Text>
                 <Text style={styles.txDate}>{formatDate(tx.date)}</Text>
               </View>
-              {/* Amount is red for expenses (negative) and green for income (positive) */}
               <Text style={[styles.txAmount, { color: tx.amount < 0 ? '#FF5252' : '#00D4AA' }]}>
                 {tx.amount < 0 ? '-' : '+'}${formatCurrency(Math.abs(tx.amount))}
               </Text>
@@ -189,10 +198,8 @@ export default function DashboardScreen({ navigation }) {
           ))}
         </View>
 
-        {/* Spacer at the bottom so the last card isn't cut off by the tab bar */}
         <View style={{ height: 40 }} />
       </ScrollView>
-
     </View>
   );
 }
@@ -260,6 +267,18 @@ const styles = StyleSheet.create({
   },
   cardDepleted: { color: '#FF5252' }, // Red balance for empty pockets
   cardBalanceLabel: { fontSize: 11, color: '#4A5E78', paddingHorizontal: 14, paddingBottom: 14 },
+
+  unsortedCard: {
+    marginHorizontal: 20, marginBottom: 12,
+    backgroundColor: '#151F32', borderRadius: 16,
+    borderWidth: 1, borderColor: 'rgba(255,159,67,0.25)',
+    flexDirection: 'row', alignItems: 'center',
+    padding: 16,
+  },
+  unsortedLeft: { flex: 1 },
+  unsortedLabel: { fontSize: 14, fontWeight: '700', color: '#FF9F43', marginBottom: 2 },
+  unsortedSub: { fontSize: 12, color: '#8899AA' },
+  unsortedAmount: { fontSize: 18, fontWeight: '800' },
 
   emptyPockets: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,

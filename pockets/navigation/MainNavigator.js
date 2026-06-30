@@ -119,7 +119,7 @@ export default function MainNavigator({ onLogout, onRetakeQuiz, userName, curren
         name="Inbox"
         options={{
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 20, color }}>🔔</Text>,
-          tabBarBadge: inboxCount > 0 ? inboxCount : undefined, // undefined = hide the badge entirely
+          tabBarBadge: inboxCount > 0 ? String(inboxCount) : undefined, // undefined = hide the badge entirely
           tabBarBadgeStyle: { backgroundColor: '#FF5252', fontSize: 11, fontWeight: '700' },
         }}
       >

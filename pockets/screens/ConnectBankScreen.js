@@ -17,10 +17,11 @@ import { supabase } from '../lib/supabase';
 import { API_URL } from '../lib/config';
 
 export default function ConnectBankScreen({ navigation }) {
-  const [connected, setConnected] = useState(false);   // Whether this user has a Plaid connection
-  const [connecting, setConnecting] = useState(false); // Spinner while the Plaid flow is in progress
-  const [syncing, setSyncing] = useState(false);       // Spinner while pulling transactions
-  const [loading, setLoading] = useState(true);        // Initial status check
+  const [connected, setConnected] = useState(false);       // Whether this user has a Plaid connection
+  const [needsReconnect, setNeedsReconnect] = useState(false); // Token expired — needs re-auth
+  const [connecting, setConnecting] = useState(false);     // Spinner while the Plaid flow is in progress
+  const [syncing, setSyncing] = useState(false);           // Spinner while pulling transactions
+  const [loading, setLoading] = useState(true);            // Initial status check
 
   // Check if the user already has a connected bank on mount
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function ConnectBankScreen({ navigation }) {
       const res = await fetch(`${API_URL}/plaid/status?userId=${userId}`);
       const data = await res.json();
       setConnected(data.connected);
+      setNeedsReconnect(data.needsReconnect);
     } catch (e) {
       console.error('Failed to check Plaid status:', e);
     } finally {
@@ -81,6 +83,7 @@ export default function ConnectBankScreen({ navigation }) {
             const exchangeData = await exchangeRes.json();
             if (exchangeData.error) throw new Error(exchangeData.error);
             setConnected(true);
+            setNeedsReconnect(false);
             Alert.alert('Bank connected!', 'Tap "Sync Transactions" to pull in your latest transactions.');
           } catch (e) {
             Alert.alert('Error', e.message || 'Failed to save bank connection');
@@ -135,14 +138,16 @@ export default function ConnectBankScreen({ navigation }) {
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Hero section — icon + status text changes based on connection state */}
         <View style={styles.hero}>
-          <View style={[styles.heroIcon, connected && styles.heroIconConnected]}>
-            <Text style={styles.heroEmoji}>{connected ? '✓' : '🏦'}</Text>
+          <View style={[styles.heroIcon, connected && !needsReconnect && styles.heroIconConnected, needsReconnect && styles.heroIconError]}>
+            <Text style={styles.heroEmoji}>{needsReconnect ? '⚠️' : connected ? '✓' : '🏦'}</Text>
           </View>
           <Text style={styles.heroTitle}>
-            {connected ? 'Bank connected' : 'Connect your bank'}
+            {needsReconnect ? 'Bank disconnected' : connected ? 'Bank connected' : 'Connect your bank'}
           </Text>
           <Text style={styles.heroSubtitle}>
-            {connected
+            {needsReconnect
+              ? 'Your bank connection has expired. Reconnect to continue syncing transactions.'
+              : connected
               ? 'Your bank account is linked. Sync anytime to pull in your latest transactions.'
               : 'Pockets uses Plaid to securely connect to your bank. Your login credentials are never stored by us.'
             }
@@ -173,25 +178,42 @@ export default function ConnectBankScreen({ navigation }) {
           <ActivityIndicator color="#00D4AA" style={{ marginTop: 40 }} />
         ) : connected ? (
           <>
-            {/* Connected: show Sync button and option to connect a different bank */}
-            <TouchableOpacity
-              style={[styles.syncBtn, syncing && { opacity: 0.7 }]}
-              onPress={handleSync}
-              disabled={syncing}
-              activeOpacity={0.85}
-            >
-              {syncing
-                ? <ActivityIndicator color="#0B1120" />
-                : <Text style={styles.syncBtnText}>Sync Transactions</Text>
-              }
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.reconnectBtn}
-              onPress={handleConnect}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.reconnectBtnText}>Connect a different bank</Text>
-            </TouchableOpacity>
+            {needsReconnect ? (
+              // Disconnected: show reconnect as the primary action
+              <TouchableOpacity
+                style={[styles.connectBtn, connecting && { opacity: 0.7 }]}
+                onPress={handleConnect}
+                disabled={connecting}
+                activeOpacity={0.85}
+              >
+                {connecting
+                  ? <ActivityIndicator color="#0B1120" />
+                  : <Text style={styles.connectBtnText}>Reconnect Bank</Text>
+                }
+              </TouchableOpacity>
+            ) : (
+              // Connected: show Sync button and option to connect a different bank
+              <>
+                <TouchableOpacity
+                  style={[styles.syncBtn, syncing && { opacity: 0.7 }]}
+                  onPress={handleSync}
+                  disabled={syncing}
+                  activeOpacity={0.85}
+                >
+                  {syncing
+                    ? <ActivityIndicator color="#0B1120" />
+                    : <Text style={styles.syncBtnText}>Sync Transactions</Text>
+                  }
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.reconnectBtn}
+                  onPress={handleConnect}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.reconnectBtnText}>Reconnect or switch bank</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </>
         ) : (
           // Not connected: show the "Connect with Plaid" button
@@ -234,7 +256,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#151F32', alignItems: 'center', justifyContent: 'center',
     marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
-  heroIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' }, // Green tint when connected
+  heroIconConnected: { backgroundColor: '#0D2820', borderColor: '#00D4AA' },
+  heroIconError: { backgroundColor: '#2A1A1A', borderColor: '#FF5252' },
   heroEmoji: { fontSize: 36 },
   heroTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', textAlign: 'center', marginBottom: 12 },
   heroSubtitle: { fontSize: 14, color: '#8899AA', textAlign: 'center', lineHeight: 22 },

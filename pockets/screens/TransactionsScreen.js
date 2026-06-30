@@ -68,6 +68,10 @@ export default function TransactionsScreen() {
         body: JSON.stringify({ userId }),
       });
       const data = await res.json();
+      if (data.error === 'bank_login_required') {
+        Alert.alert('Bank reconnection needed', 'Your bank connection has expired. Go to Settings → Connected Account to reconnect.');
+        return;
+      }
       if (data.error) throw new Error(data.error);
 
       // Show how many new transactions arrived

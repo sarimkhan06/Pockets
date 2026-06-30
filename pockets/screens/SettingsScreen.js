@@ -19,7 +19,8 @@ import { TEMPLATES } from '../data/onboardingData';
 
 export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, currentMethod, onRestoreComplete, navigation }) {
   const [backup, setBackup] = useState(null);           // { hasBackup, pocketCount, previousMethodId }
-  const [bankConnected, setBankConnected] = useState(null); // null = loading, true/false = known
+  const [bankConnected, setBankConnected] = useState(null);     // null = loading, true/false = known
+  const [bankNeedsReconnect, setBankNeedsReconnect] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [syncing, setSyncing] = useState(false);
   // Local copies so Settings can update itself without waiting for App.js prop updates
@@ -43,7 +44,9 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
         fetch(`${API_URL}/user-settings?userId=${userId}`),
       ]);
       setBackup(await backupRes.json());
-      setBankConnected((await bankRes.json()).connected);
+      const bankData = await bankRes.json();
+      setBankConnected(bankData.connected);
+      setBankNeedsReconnect(bankData.needsReconnect);
       const settings = await settingsRes.json();
       // Update the method display if the server has a more up-to-date value
       if (settings?.method_id && TEMPLATES[settings.method_id]) {
@@ -138,23 +141,22 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
   //   onPress — what to do when tapped
   //   danger  — if true, renders the label in red (used for "Sign Out")
   //   loading — if true, shows a spinner instead of the value/chevron
-  const Row = ({ icon, label, value, onPress, danger, loading }) => (
+  const Row = ({ icon, label, value, valueColor, onPress, danger, loading }) => (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7} disabled={loading}>
       <Text style={styles.rowIcon}>{icon}</Text>
       <Text style={[styles.rowLabel, danger && styles.dangerText]}>{label}</Text>
       {loading
         ? <ActivityIndicator size="small" color="#8899AA" />
         : value !== undefined
-          ? <Text style={styles.rowValue}>{value}</Text>
+          ? <Text style={[styles.rowValue, valueColor && { color: valueColor }]}>{value}</Text>
           : null
       }
-      {/* Hide chevron for danger rows (sign out doesn't navigate anywhere) */}
       {!danger && !loading && <Text style={styles.rowChevron}>›</Text>}
     </TouchableOpacity>
   );
 
-  // Show "…" while the bank status is loading (null), then "Connected" or "Not connected"
-  const bankStatusLabel = bankConnected === null ? '…' : bankConnected ? 'Connected' : 'Not connected';
+  const bankStatusLabel = bankConnected === null ? '…' : bankNeedsReconnect ? 'Reconnect needed' : bankConnected ? 'Connected' : 'Not connected';
+  const bankStatusColor = bankNeedsReconnect ? '#FF5252' : bankConnected ? '#00D4AA' : '#8899AA';
 
   return (
     <View style={styles.container}>
@@ -227,6 +229,7 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
             icon="🏦"
             label="Connected Account"
             value={bankStatusLabel}
+            valueColor={bankStatusColor}
             onPress={() => navigation.navigate('ConnectBank')}
           />
         </View>

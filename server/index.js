@@ -1,10 +1,14 @@
+// require() is Node's way to import packages — like "import" in other languages
 // Load environment variables from .env file into process.env
 require('dotenv').config();
 
-const express = require('express');
-const { createClient } = require('@supabase/supabase-js');
-const { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } = require('plaid');
+const express = require('express'); // Express is the web framework that handles routing and HTTP
+const { createClient } = require('@supabase/supabase-js'); // Supabase client for database access
+const { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } = require('plaid'); // Plaid SDK for bank connections
 
+// Configure the Plaid SDK: tell it which environment to use (sandbox = fake test bank, production = real banks)
+// and attach our API credentials so Plaid knows who is making requests
+// process.env reads values loaded from the .env file — secrets never go directly in source code
 const plaidConfig = new Configuration({
   basePath: PlaidEnvironments[process.env.PLAID_ENV || 'sandbox'],
   baseOptions: {
@@ -14,9 +18,13 @@ const plaidConfig = new Configuration({
     },
   },
 });
-const plaidClient = new PlaidApi(plaidConfig);
+const plaidClient = new PlaidApi(plaidConfig); // the object we call to interact with Plaid's API
 
-const app = express();
+const app = express(); // creates the Express application — this IS the server
+
+// Middleware runs on every incoming request before any route handler executes
+// express.json() reads the raw request body and parses it as JSON into req.body
+// without this line, req.body would be undefined in all POST and PUT routes
 app.use(express.json());
 
 // Connect to Supabase using the service role key — bypasses RLS for trusted server operations
@@ -27,23 +35,38 @@ const supabase = createClient(
 
 // --- Helpers ---
 
-// Distributes the user's current bank balance across their active pockets by income_percent
+// Fetches the user's live bank balance via Plaid and distributes it across their active pockets
+// proportionally based on each pocket's income_percent. The last pocket absorbs any rounding
+// remainder so the total always equals the bank balance exactly.
+// Returns { distributed: true, totalBalance } on success, or { distributed: false } if the user
+// has no linked bank, no eligible pockets, or all income_percent values are zero.
 async function initializePocketBalances(userId) {
+  // Look up the Plaid access token stored for this user
   const { data: plaidItem } = await supabase
     .from('plaid_items').select('access_token').eq('user_id', userId).single();
   if (!plaidItem) return { distributed: false };
 
+  // Fetch live account balances from Plaid and sum all depository (checking/savings) accounts.
+  // Uses current (posted) balance, not available — available already deducts pending transactions,
+  // which would cause double-counting when those pending transactions later settle and get imported.
   const balanceResponse = await plaidClient.accountsGet({
     access_token: plaidItem.access_token,
   });
-  const totalBalance = balanceResponse.data.accounts
+  const accounts = balanceResponse.data.accounts;
+  const chequingBalance = accounts
     .filter(a => a.type === 'depository')
-    .reduce((sum, a) => sum + (a.balances.available ?? a.balances.current ?? 0), 0);
+    .reduce((sum, a) => sum + (a.balances.current ?? a.balances.available ?? 0), 0);
+  const creditOwed = accounts
+    .filter(a => a.type === 'credit')
+    .reduce((sum, a) => sum + (a.balances.current ?? 0), 0);
+  const totalBalance = Math.round((chequingBalance - creditOwed) * 100) / 100;
 
+  // Fetch all active (non-archived) pockets for this user
   const { data: pockets } = await supabase
     .from('pockets').select('*').eq('user_id', userId).is('archived_at', null);
 
-  const eligible = (pockets || []).filter(p => p.income_percent != null);
+  // Only named pockets (not Unsorted) with an income_percent participate in the distribution
+  const eligible = (pockets || []).filter(p => p.income_percent != null && !p.is_unsorted);
   if (eligible.length === 0) return { distributed: false, totalBalance };
 
   const totalPercent = eligible.reduce((sum, p) => sum + p.income_percent, 0);
@@ -58,25 +81,182 @@ async function initializePocketBalances(userId) {
     remaining -= share;
     await supabase.from('pockets').update({ balance: share }).eq('id', pocket.id);
   }
+
+  // Ensure the Unsorted pocket exists. At initialization all balance is distributed to named
+  // pockets, so Unsorted starts at 0. It gets pegged on every subsequent sync.
+  const existingUnsorted = (pockets || []).find(p => p.is_unsorted);
+  if (!existingUnsorted) {
+    await supabase.from('pockets').insert({
+      user_id: userId, name: 'Unsorted', color: '#4A5E78', balance: 0, is_unsorted: true,
+    });
+  } else {
+    await supabase.from('pockets').update({ balance: 0 }).eq('id', existingUnsorted.id);
+  }
+
   return { distributed: true, totalBalance };
 }
+
+// --- Icon helpers (shared by sync and refresh-icons routes) ---
+
+const CATEGORY_ICONS = {
+  FOOD_AND_DRINK:          '🍔',
+  GROCERIES:               '🛒',
+  TRAVEL:                  '✈️',
+  TRANSPORTATION:          '🚗',
+  ENTERTAINMENT:           '🎬',
+  GENERAL_MERCHANDISE:     '🛍️',
+  HOME_IMPROVEMENT:        '🔨',
+  MEDICAL:                 '💊',
+  PERSONAL_CARE:           '💅',
+  GENERAL_SERVICES:        '🔧',
+  GOVERNMENT_AND_NON_PROFIT: '🏛️',
+  RENT_AND_UTILITIES:      '🏠',
+  INCOME:                  '💰',
+  TRANSFER_IN:             '📥',
+  TRANSFER_OUT:            '📤',
+  LOAN_PAYMENTS:           '🏦',
+  BANK_FEES:               '🏦',
+};
+
+// Plaid's detailed categories — much more specific than primary, covers most cases automatically
+const DETAILED_CATEGORY_ICONS = {
+  // Food & Drink
+  'FOOD_AND_DRINK_COFFEE':                '☕',
+  'FOOD_AND_DRINK_FAST_FOOD':             '🍔',
+  'FOOD_AND_DRINK_GROCERIES':             '🛒',
+  'FOOD_AND_DRINK_RESTAURANT':            '🍽️',
+  'FOOD_AND_DRINK_BEER_WINE_AND_LIQUOR':  '🍺',
+  'FOOD_AND_DRINK_VENDING_MACHINES':      '🥤',
+  'FOOD_AND_DRINK_OTHER_FOOD_AND_DRINK':  '🍴',
+  // Transportation
+  'TRANSPORTATION_GAS':                   '⛽',
+  'TRANSPORTATION_PARKING':               '🅿️',
+  'TRANSPORTATION_PUBLIC_TRANSIT':        '🚌',
+  'TRANSPORTATION_TAXIS_AND_RIDE_SHARING':'🚗',
+  'TRANSPORTATION_TOLLS':                 '🛣️',
+  'TRANSPORTATION_BIKES_AND_SCOOTERS':    '🚲',
+  'TRANSPORTATION_OTHER_TRANSPORTATION':  '🚗',
+  // Travel
+  'TRAVEL_FLIGHTS':                       '✈️',
+  'TRAVEL_LODGING':                       '🏨',
+  'TRAVEL_RENTAL_CARS':                   '🚗',
+  'TRAVEL_OTHER_TRAVEL':                  '✈️',
+  // Entertainment
+  'ENTERTAINMENT_MUSIC_AND_AUDIO':        '🎵',
+  'ENTERTAINMENT_TV_AND_MOVIES':          '📺',
+  'ENTERTAINMENT_VIDEO_GAMES':            '🎮',
+  'ENTERTAINMENT_CASINOS_AND_GAMBLING':   '🎰',
+  'ENTERTAINMENT_SPORTING_EVENTS_AMUSEMENT_PARKS_AND_MUSEUMS': '🎡',
+  'ENTERTAINMENT_OTHER_ENTERTAINMENT':    '🎬',
+  // General Merchandise
+  'GENERAL_MERCHANDISE_SUPERSTORES':                  '🛒',
+  'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES':          '📦',
+  'GENERAL_MERCHANDISE_ELECTRONICS':                  '🖥️',
+  'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES':     '👕',
+  'GENERAL_MERCHANDISE_DEPARTMENT_STORES':            '🏬',
+  'GENERAL_MERCHANDISE_DISCOUNT_STORES':              '🛍️',
+  'GENERAL_MERCHANDISE_CONVENIENCE_STORES':           '🏪',
+  'GENERAL_MERCHANDISE_SPORTING_GOODS':               '⚽',
+  'GENERAL_MERCHANDISE_PET_SUPPLIES':                 '🐾',
+  'GENERAL_MERCHANDISE_BOOKSTORES_AND_NEWSSTANDS':    '📚',
+  'GENERAL_MERCHANDISE_GIFTS_AND_NOVELTIES':          '🎁',
+  'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE':    '🛍️',
+  // Home Improvement
+  'HOME_IMPROVEMENT_FURNITURE':            '🛋️',
+  'HOME_IMPROVEMENT_HARDWARE':             '🔨',
+  'HOME_IMPROVEMENT_REPAIR_AND_MAINTENANCE':'🔧',
+  'HOME_IMPROVEMENT_SECURITY':             '🔒',
+  'HOME_IMPROVEMENT_OTHER_HOME_IMPROVEMENT':'🏠',
+  // Medical
+  'MEDICAL_DENTAL_CARE':                  '🦷',
+  'MEDICAL_EYE_CARE':                     '👓',
+  'MEDICAL_PHARMACIES_AND_SUPPLEMENTS':   '💊',
+  'MEDICAL_PRIMARY_CARE':                 '🏥',
+  'MEDICAL_VETERINARY_SERVICES':          '🐾',
+  'MEDICAL_NURSING_CARE':                 '🏥',
+  'MEDICAL_OTHER_MEDICAL':                '💊',
+  // Personal Care
+  'PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS':'💪',
+  'PERSONAL_CARE_HAIR_AND_BEAUTY':        '💅',
+  'PERSONAL_CARE_LAUNDRY_AND_DRY_CLEANING':'👕',
+  'PERSONAL_CARE_OTHER_PERSONAL_CARE':    '💅',
+  // General Services
+  'GENERAL_SERVICES_AUTOMOTIVE':          '🔧',
+  'GENERAL_SERVICES_EDUCATION':           '📚',
+  'GENERAL_SERVICES_INSURANCE':           '🛡️',
+  'GENERAL_SERVICES_ONLINE_SERVICES':     '💻',
+  'GENERAL_SERVICES_CHILDCARE':           '👶',
+  'GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING': '📊',
+  'GENERAL_SERVICES_PRINTING_AND_SHIPPING':'📦',
+  'GENERAL_SERVICES_STORAGE':             '📦',
+  'GENERAL_SERVICES_OTHER_GENERAL_SERVICES':'🔧',
+  // Rent & Utilities
+  'RENT_AND_UTILITIES_RENT':              '🏠',
+  'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY':'💡',
+  'RENT_AND_UTILITIES_INTERNET_AND_CABLE':'🌐',
+  'RENT_AND_UTILITIES_TELEPHONE':         '📱',
+  'RENT_AND_UTILITIES_WATER':             '💧',
+  'RENT_AND_UTILITIES_SEWAGE_AND_WASTE_MANAGEMENT': '🗑️',
+  'RENT_AND_UTILITIES_OTHER_UTILITIES':   '🏠',
+  // Income
+  'INCOME_WAGES':                         '💰',
+  'INCOME_DIVIDENDS':                     '📈',
+  'INCOME_TAX_REFUND':                    '💰',
+  'INCOME_INTEREST_EARNED':               '📈',
+  'INCOME_OTHER_INCOME':                  '💰',
+  // Government
+  'GOVERNMENT_AND_NON_PROFIT_DONATIONS':           '❤️',
+  'GOVERNMENT_AND_NON_PROFIT_GOVERNMENT_DEPARTMENTS':'🏛️',
+  'GOVERNMENT_AND_NON_PROFIT_TAX_PAYMENT':         '🏛️',
+};
+
+// Small list only for services Plaid broadly lumps as "GENERAL_SERVICES_ONLINE_SERVICES"
+// or other imprecise categories — AI tools, streaming, big tech subscriptions
+const MERCHANT_ICONS = {
+  'anthropic': '🤖', 'openai': '🤖', 'chatgpt': '🤖',
+  'netflix': '📺', 'disney': '🏰', 'crave': '📺', 'hulu': '📺', 'hbo': '📺',
+  'spotify': '🎵', 'tidal': '🎵', 'apple music': '🎵',
+  'youtube': '🎬', 'twitch': '🎮',
+  'apple': '🍎', 'icloud': '🍎',
+  'google': '🔍',
+  'microsoft': '🖥️', 'xbox': '🎮',
+  'adobe': '🎨', 'dropbox': '☁️', 'slack': '💬', 'zoom': '📹', 'github': '💻',
+  'doordash': '🛵', 'uber eats': '🛵', 'skipthedishes': '🛵', 'instacart': '🛒',
+  'amazon': '📦',
+};
+
+const getMerchantIcon = (name) => {
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  for (const [keyword, icon] of Object.entries(MERCHANT_ICONS)) {
+    if (lower.includes(keyword)) return icon;
+  }
+  return null;
+};
 
 // --- Routes ---
 
 // GET /pockets — fetch active (non-archived) pockets, filtered by userId if provided
+// app.get/post/put/delete registers a handler for that HTTP method + URL path
+// req (request)  = everything the client sent (body, URL params, query string, headers)
+// res (response) = the object we use to send something back to the client
 app.get('/pockets', async (req, res) => {
-  const { userId } = req.query;
+  const { userId } = req.query; // req.query = URL query string params, e.g. /pockets?userId=abc
+  // Supabase uses a query builder that chains like SQL:
+  // .from() picks the table, .select() picks columns (* = all), .eq()/.is() add WHERE conditions
+  // await executes the query and returns { data, error }
   let query = supabase.from('pockets').select('*').is('archived_at', null);
   if (userId) query = query.eq('user_id', userId);
   const { data, error } = await query;
 
+  // HTTP status codes: 200 = OK (default), 201 = Created, 400 = bad request, 500 = server error
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  res.json(data); // res.json() sends the JS object back as JSON and ends the request
 });
 
 // POST /pockets — insert a new pocket; sources = [{ pocketId, amount }] transfers balance from those pockets
 app.post('/pockets', async (req, res) => {
-  const { name, balance, color, income_percent, userId, sources } = req.body;
+  const { name, balance, color, income_percent, userId, sources } = req.body; // req.body = the JSON payload sent in the request body
 
   if (sources && sources.length > 0 && balance > 0) {
     const total = sources.reduce((sum, s) => sum + s.amount, 0);
@@ -116,7 +296,7 @@ app.post('/pockets', async (req, res) => {
 
 // PUT /pockets/:id — update a pocket; transfers = [{ pocketId, amount }] moves money to/from others
 app.put('/pockets/:id', async (req, res) => {
-  const id = req.params.id;
+  const id = req.params.id; // req.params captures path segments prefixed with : — /pockets/123 → id = '123'
   const { name, balance, color, income_percent, transfers } = req.body;
 
   // Validate source pockets have enough when amount is negative (taking from them)
@@ -302,55 +482,47 @@ app.get('/transactions/inbox', async (req, res) => {
   res.json(data);
 });
 
-// POST /transactions/assign — assign a transaction to a pocket
-// Also updates the pocket's spent amount
+// POST /transactions/assign — assign a transaction to a pocket.
+// Moves the transaction's amount from Unsorted into the target pocket,
+// so the pocket total stays equal to the live bank balance.
 app.post('/transactions/assign', async (req, res) => {
   const { transactionId, pocketId } = req.body;
 
-  // Step 1: get the transaction so we know the amount
   const { data: transaction, error: txError } = await supabase
-    .from('transactions')
-    .select('amount')
-    .eq('id', transactionId)
-    .single();
-
+    .from('transactions').select('amount, user_id').eq('id', transactionId).single();
   if (txError) return res.status(500).json({ error: txError.message });
 
-  // Step 2: get the pocket's current balance
   const { data: pocket, error: pocketError } = await supabase
-    .from('pockets')
-    .select('balance')
-    .eq('id', pocketId)
-    .single();
-
+    .from('pockets').select('balance').eq('id', pocketId).single();
   if (pocketError) return res.status(500).json({ error: pocketError.message });
 
-  // Step 3: update the transaction — set its pocket_id
   const { error: updateTxError } = await supabase
-    .from('transactions')
-    .update({ pocket_id: pocketId })
-    .eq('id', transactionId);
-
+    .from('transactions').update({ pocket_id: pocketId }).eq('id', transactionId);
   if (updateTxError) return res.status(500).json({ error: updateTxError.message });
 
-  // Step 4: subtract transaction amount from pocket balance
+  // target pocket absorbs the signed amount (negative = spending reduces it, positive = income grows it)
   const { error: updatePocketError } = await supabase
-    .from('pockets')
-    .update({ balance: pocket.balance - Math.abs(transaction.amount) })
-    .eq('id', pocketId);
-
+    .from('pockets').update({ balance: pocket.balance + transaction.amount }).eq('id', pocketId);
   if (updatePocketError) return res.status(500).json({ error: updatePocketError.message });
+
+  // Unsorted moves in the opposite direction — total stays the same
+  const { data: unsorted } = await supabase
+    .from('pockets').select('id, balance').eq('user_id', transaction.user_id).eq('is_unsorted', true).single();
+  if (unsorted) {
+    await supabase.from('pockets')
+      .update({ balance: unsorted.balance - transaction.amount }).eq('id', unsorted.id);
+  }
 
   res.json({ success: true });
 });
 
-// POST /transactions/assign-overflow — assign a transaction that exceeds one pocket's budget
-// The primary pocket absorbs what it can, the overflow pocket covers the rest
+// POST /transactions/assign-overflow — split an expense across two pockets.
+// Primary absorbs what it has, overflow covers the rest. Both draw from Unsorted.
 app.post('/transactions/assign-overflow', async (req, res) => {
   const { transactionId, primaryPocketId, overflowPocketId } = req.body;
 
   const { data: transaction, error: txError } = await supabase
-    .from('transactions').select('amount').eq('id', transactionId).single();
+    .from('transactions').select('amount, user_id').eq('id', transactionId).single();
   if (txError) return res.status(500).json({ error: txError.message });
 
   const { data: primaryPocket, error: primaryError } = await supabase
@@ -362,24 +534,24 @@ app.post('/transactions/assign-overflow', async (req, res) => {
   if (overflowError) return res.status(500).json({ error: overflowError.message });
 
   const txAmount = Math.abs(transaction.amount);
-  const overflowAmount = txAmount - primaryPocket.balance;
+  const primaryCoverage = Math.min(primaryPocket.balance, txAmount);
+  const overflowCoverage = txAmount - primaryCoverage;
 
-  // Assign transaction to primary pocket
   const { error: updateTxError } = await supabase
     .from('transactions').update({ pocket_id: primaryPocketId }).eq('id', transactionId);
   if (updateTxError) return res.status(500).json({ error: updateTxError.message });
 
-  // Primary pocket drains to 0
-  const { error: updatePrimaryError } = await supabase
-    .from('pockets').update({ balance: 0 }).eq('id', primaryPocketId);
-  if (updatePrimaryError) return res.status(500).json({ error: updatePrimaryError.message });
+  await supabase.from('pockets').update({ balance: primaryPocket.balance - primaryCoverage }).eq('id', primaryPocketId);
+  await supabase.from('pockets').update({ balance: overflowPocket.balance - overflowCoverage }).eq('id', overflowPocketId);
 
-  // Overflow pocket covers the rest
-  const { error: updateOverflowError } = await supabase
-    .from('pockets').update({ balance: overflowPocket.balance - overflowAmount }).eq('id', overflowPocketId);
-  if (updateOverflowError) return res.status(500).json({ error: updateOverflowError.message });
+  // Unsorted comes back up by the full transaction amount — it was holding it
+  const { data: unsorted } = await supabase
+    .from('pockets').select('id, balance').eq('user_id', transaction.user_id).eq('is_unsorted', true).single();
+  if (unsorted) {
+    await supabase.from('pockets').update({ balance: unsorted.balance + txAmount }).eq('id', unsorted.id);
+  }
 
-  res.json({ success: true, overflowAmount });
+  res.json({ success: true, overflowAmount: overflowCoverage });
 });
 
 // GET /user-settings?userId=xxx — fetch the budgeting method for a user
@@ -452,6 +624,15 @@ app.post('/transactions/distribute-income', async (req, res) => {
     .from('transactions').update({ pocket_id: primary.pocketId }).eq('id', transactionId);
   if (txErr) return res.status(500).json({ error: txErr.message });
 
+  // Subtract total distributed from Unsorted — income moved from Unsorted into named pockets
+  const { data: txData } = await supabase.from('transactions').select('user_id').eq('id', transactionId).single();
+  const totalDistributed = distributions.reduce((sum, d) => sum + d.topUpAmount, 0);
+  const { data: unsorted } = await supabase
+    .from('pockets').select('id, balance').eq('user_id', txData.user_id).eq('is_unsorted', true).single();
+  if (unsorted) {
+    await supabase.from('pockets').update({ balance: unsorted.balance - totalDistributed }).eq('id', unsorted.id);
+  }
+
   res.json({ success: true });
 });
 
@@ -460,11 +641,11 @@ app.get('/plaid/status', async (req, res) => {
   const { userId } = req.query;
   const { data, error } = await supabase
     .from('plaid_items')
-    .select('item_id')
+    .select('item_id, needs_reconnect')
     .eq('user_id', userId)
     .single();
   if (error && error.code !== 'PGRST116') return res.status(500).json({ error: error.message });
-  res.json({ connected: !!data });
+  res.json({ connected: !!data, needsReconnect: data?.needs_reconnect || false });
 });
 
 // POST /plaid/create-link-token — creates a token that opens Plaid Link in the app
@@ -499,8 +680,8 @@ app.post('/plaid/exchange-token', async (req, res) => {
       .from('plaid_items').select('id').eq('user_id', userId).single();
 
     const { error } = existing
-      ? await supabase.from('plaid_items').update({ access_token: accessToken, item_id: itemId }).eq('user_id', userId)
-      : await supabase.from('plaid_items').insert({ user_id: userId, access_token: accessToken, item_id: itemId });
+      ? await supabase.from('plaid_items').update({ access_token: accessToken, item_id: itemId, needs_reconnect: false }).eq('user_id', userId)
+      : await supabase.from('plaid_items').insert({ user_id: userId, access_token: accessToken, item_id: itemId, needs_reconnect: false });
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
@@ -514,10 +695,10 @@ app.post('/plaid/exchange-token', async (req, res) => {
 app.post('/plaid/sync-transactions', async (req, res) => {
   const { userId } = req.body;
   try {
-    // Get the stored access token for this user
+    // Get the stored access token and connection date for this user
     const { data: plaidItem, error: itemError } = await supabase
       .from('plaid_items')
-      .select('access_token')
+      .select('access_token, created_at')
       .eq('user_id', userId)
       .single();
 
@@ -534,13 +715,12 @@ app.post('/plaid/sync-transactions', async (req, res) => {
       end_date: now.toISOString().split('T')[0],
     });
 
-    const skipCategories = ['TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS', 'BANK_FEES'];
-    const plaidTransactions = response.data.transactions.filter(tx => {
-      const category = tx.personal_finance_category?.primary;
-      if (category === 'INCOME') return true;
-      if (skipCategories.includes(category)) return false;
-      return true;
-    });
+    // Skip credit card payment transactions only — these appear on both the bank side (debit out)
+    // and the credit card side (credit received). Filtering them prevents double-counting since
+    // individual credit card purchases are tracked separately from the CC account.
+    const plaidTransactions = response.data.transactions.filter(tx =>
+      tx.personal_finance_category?.detailed !== 'CREDIT_CARD_PAYMENT'
+    );
 
     // Convert Plaid's "YYYY-MM-DD" date to our "Mon D" format
     const formatPlaidDate = (isoDate) => {
@@ -548,52 +728,45 @@ app.post('/plaid/sync-transactions', async (req, res) => {
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     };
 
-    const CATEGORY_ICONS = {
-      FOOD_AND_DRINK:          '🍔',
-      GROCERIES:               '🛒',
-      TRAVEL:                  '✈️',
-      TRANSPORTATION:          '🚗',
-      ENTERTAINMENT:           '🎬',
-      GENERAL_MERCHANDISE:     '🛍️',
-      HOME_IMPROVEMENT:        '🔨',
-      MEDICAL:                 '💊',
-      PERSONAL_CARE:           '💅',
-      GENERAL_SERVICES:        '🔧',
-      GOVERNMENT_AND_NON_PROFIT: '🏛️',
-      RENT_AND_UTILITIES:      '🏠',
-      INCOME:                  '💰',
-      TRANSFER_IN:             '📥',
-      TRANSFER_OUT:            '📤',
-      LOAN_PAYMENTS:           '🏦',
-      BANK_FEES:               '🏦',
-    };
-
     const toInsert = plaidTransactions.map(tx => ({
       merchant: tx.merchant_name || tx.name,
       amount: tx.amount * -1, // Plaid uses positive for debits, we use negative
       date: formatPlaidDate(tx.date),
-      icon: CATEGORY_ICONS[tx.personal_finance_category?.primary] ?? '💳',
+      icon: getMerchantIcon(tx.merchant_name || tx.name)
+        ?? DETAILED_CATEGORY_ICONS[tx.personal_finance_category?.detailed]
+        ?? CATEGORY_ICONS[tx.personal_finance_category?.primary]
+        ?? '💳',
       pocket_id: null,
       user_id: userId,
       plaid_transaction_id: tx.transaction_id,
     }));
 
-    // Get existing plaid transaction IDs to avoid duplicates
+    // Get existing transactions to avoid duplicates — check both plaid_transaction_id
+    // and (merchant + amount + date) as a fallback for when Plaid assigns new IDs after reconnect
     const { data: existing } = await supabase
       .from('transactions')
-      .select('plaid_transaction_id')
-      .eq('user_id', userId)
-      .not('plaid_transaction_id', 'is', null);
+      .select('plaid_transaction_id, merchant, amount, date')
+      .eq('user_id', userId);
 
-    const existingIds = new Set((existing || []).map(t => t.plaid_transaction_id));
+    // Only import transactions from the day the user connected their bank onwards.
+    // This prevents old history from flooding the inbox — the initial bank balance
+    // already reflects all past spending, so importing old transactions would double-count.
+    const connectedAt = new Date(plaidItem.created_at);
+    connectedAt.setHours(0, 0, 0, 0);
+    const MONTHS = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+    const candidates = toInsert.filter(tx => {
+      const [month, day] = tx.date.split(' ');
+      if (MONTHS[month] === undefined) return true;
+      const txDate = new Date(new Date().getFullYear(), MONTHS[month], parseInt(day, 10));
+      return txDate >= connectedAt;
+    });
 
-    // On first sync (no existing transactions), only import from today forward
-    // so historical transactions don't double-count the opening balance
-    const isFirstSync = existingIds.size === 0;
-    const todayStr = now.toISOString().split('T')[0];
-    const newTransactions = toInsert.filter(tx => {
+    const existingIds = new Set((existing || []).filter(t => t.plaid_transaction_id).map(t => t.plaid_transaction_id));
+    const existingFingerprints = new Set((existing || []).map(t => `${t.merchant}|${t.amount}|${t.date}`));
+
+    const newTransactions = candidates.filter(tx => {
       if (existingIds.has(tx.plaid_transaction_id)) return false;
-      if (isFirstSync && plaidTransactions.find(p => p.transaction_id === tx.plaid_transaction_id)?.date < todayStr) return false;
+      if (existingFingerprints.has(`${tx.merchant}|${tx.amount}|${tx.date}`)) return false;
       return true;
     });
 
@@ -602,11 +775,70 @@ app.post('/plaid/sync-transactions', async (req, res) => {
       if (insertError) return res.status(500).json({ error: insertError.message });
     }
 
+    // Peg Unsorted pocket to live balance every sync.
+    // Unsorted = live bank balance − sum of all named pocket balances.
+    // This means any gap caused by Plaid's feeds arriving at different speeds lands in
+    // Unsorted, and pocket totals always equal the real bank balance.
+    try {
+      const balanceRes = await plaidClient.accountsGet({ access_token: plaidItem.access_token });
+      const accounts = balanceRes.data.accounts;
+
+      // Net position = chequing balance − credit card balance owed.
+      // Credit card purchases reduce your true net worth immediately even though
+      // the cash hasn't left your chequing account yet.
+      const chequingBalance = accounts
+        .filter(a => a.type === 'depository')
+        .reduce((sum, a) => sum + (a.balances.current ?? 0), 0);
+      const creditOwed = accounts
+        .filter(a => a.type === 'credit')
+        .reduce((sum, a) => sum + (a.balances.current ?? 0), 0);
+      const liveBalance = Math.round((chequingBalance - creditOwed) * 100) / 100;
+
+      const { data: allPockets } = await supabase
+        .from('pockets').select('id, balance, is_unsorted').eq('user_id', userId).is('archived_at', null);
+
+      let unsortedPocket = allPockets?.find(p => p.is_unsorted);
+      if (!unsortedPocket) {
+        const { data: created } = await supabase
+          .from('pockets')
+          .insert({ user_id: userId, name: 'Unsorted', color: '#4A5E78', balance: 0, is_unsorted: true })
+          .select().single();
+        unsortedPocket = created;
+      }
+
+      const namedTotal = Math.round(
+        (allPockets || []).filter(p => !p.is_unsorted).reduce((sum, p) => sum + p.balance, 0) * 100
+      ) / 100;
+
+      await supabase.from('pockets')
+        .update({ balance: Math.round((liveBalance - namedTotal) * 100) / 100 })
+        .eq('id', unsortedPocket.id);
+    } catch (e) {} // Non-fatal — sync still succeeded even if pegging fails
+
     res.json({ success: true, count: newTransactions.length });
   } catch (err) {
     console.error('Plaid sync error:', err.response?.data || err.message);
+    if (err.response?.data?.error_code === 'ITEM_LOGIN_REQUIRED') {
+      await supabase.from('plaid_items').update({ needs_reconnect: true }).eq('user_id', userId);
+      return res.status(400).json({ error: 'bank_login_required' });
+    }
     res.status(500).json({ error: 'Failed to sync transactions' });
   }
+});
+
+// POST /transactions/refresh-icons — re-assigns icons to all existing transactions using the latest merchant/category logic
+app.post('/transactions/refresh-icons', async (req, res) => {
+  const { userId } = req.body;
+  const { data: txs, error } = await supabase.from('transactions').select('id, merchant').eq('user_id', userId);
+  if (error) return res.status(500).json({ error: error.message });
+
+  let updated = 0;
+  for (const tx of txs) {
+    const icon = getMerchantIcon(tx.merchant) ?? '💳';
+    await supabase.from('transactions').update({ icon }).eq('id', tx.id);
+    updated++;
+  }
+  res.json({ success: true, updated });
 });
 
 // POST /plaid/initialize-pocket-balances — fetches real account balance and distributes it across pockets
@@ -678,7 +910,7 @@ app.get('/reset-password', (req, res) => {
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@upabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script>
     const { createClient } = supabase;
     const client = createClient('${supabaseUrl}', '${supabaseKey}');
@@ -762,6 +994,8 @@ app.get('/reset-password', (req, res) => {
 </html>`);
 });
 
+// Start the HTTP server and begin listening for requests on port 3000
+// The callback runs once the server is ready — you'll see this message in the terminal
 app.listen(3000, () => {
   console.log('Server running on port 3000');
 });

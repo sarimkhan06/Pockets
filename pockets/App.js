@@ -48,31 +48,27 @@ export default function App() {
     } catch (e) {}
   }, []);
 
-  // Calls the backend to pull new transactions from Plaid, then refreshes the inbox count
-  // and shows a native Alert if there are new items waiting for the user's attention.
-  const syncAndNotify = useCallback(async (userId) => {
+  // Silently syncs transactions on app open — no popup, just updates the inbox badge.
+  // Only alerts if the bank connection has expired (user needs to act on that).
+  const silentSync = useCallback(async (userId) => {
     try {
-      await fetch(`${API_URL}/plaid/sync-transactions`, {
+      const res = await fetch(`${API_URL}/plaid/sync-transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       });
-    } catch (e) {} // Non-fatal: if sync fails, the user can retry from Transactions tab
-    try {
-      const res = await fetch(`${API_URL}/transactions/inbox?userId=${userId}`);
       const data = await res.json();
-      const count = Array.isArray(data) ? data.length : 0;
-      setInboxCount(count);
-      // Only alert if there are actually new transactions to review
-      if (count > 0) {
+      if (data.error === 'bank_login_required') {
         Alert.alert(
-          'Transactions to review',
-          `You have ${count} unassigned transaction${count !== 1 ? 's' : ''} in your inbox.`,
-          [{ text: 'OK' }],
+          'Bank reconnection needed',
+          'Your bank connection has expired. Go to Settings → Connected Account to reconnect.',
+          [{ text: 'OK' }]
         );
+        return;
       }
-    } catch (e) {}
-  }, []);
+      await refreshInboxCount(userId);
+    } catch (e) {} // Non-fatal — user can sync manually from the Transactions tab
+  }, [refreshInboxCount]);
 
   // useEffect with an empty dependency array [] runs once when the app first loads.
   // Its job: check if the user already has an active session (they were logged in before).
@@ -97,6 +93,7 @@ export default function App() {
           fetch(`${API_URL}/user-settings?userId=${session.user.id}`),
           fetch(`${API_URL}/plaid/status?userId=${session.user.id}`),
         ]);
+        // Convert both responses from raw text into JavaScript objects
         const settings = await settingsRes.json();
         const plaid = await plaidRes.json();
 
@@ -105,14 +102,22 @@ export default function App() {
         if (settings?.method_id && plaid?.connected) {
           setCurrentMethod(TEMPLATES[settings.method_id]);
           setScreen('main');
-          syncAndNotify(session.user.id); // Background sync on every app open
+          if (plaid?.needsReconnect) {
+            Alert.alert(
+              'Bank disconnected',
+              'Your bank connection has expired. Go to Settings → Connected Account to reconnect.',
+              [{ text: 'OK' }]
+            );
+            refreshInboxCount(session.user.id);
+          } else {
+            silentSync(session.user.id);
+          }
         } else {
           setScreen('onboarding'); // Resume incomplete setup
         }
       } catch (e) {
         // If the backend is unreachable, go to main anyway so the app doesn't get stuck
         setScreen('main');
-        syncAndNotify(session.user.id);
       }
     });
 
@@ -178,13 +183,21 @@ export default function App() {
                 if (settings?.method_id && plaid?.connected) {
                   setCurrentMethod(TEMPLATES[settings.method_id]);
                   setScreen('main');
-                  syncAndNotify(session.user.id);
+                  if (plaid?.needsReconnect) {
+                    Alert.alert(
+                      'Bank disconnected',
+                      'Your bank connection has expired. Go to Settings → Connected Account to reconnect.',
+                      [{ text: 'OK' }]
+                    );
+                    refreshInboxCount(session.user.id);
+                  } else {
+                    silentSync(session.user.id);
+                  }
                 } else {
                   setScreen('onboarding');
                 }
               } catch (e) {
                 setScreen('main');
-                syncAndNotify(session.user.id);
               }
             }}
             // onSignUp is called after a successful sign-up — the user object is saved

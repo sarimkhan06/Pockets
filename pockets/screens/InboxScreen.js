@@ -68,7 +68,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
           // This lets us track what the user has done THIS session without
           // re-fetching from the server after every action.
           setItems(inboxData.map(tx => ({ ...tx, status: 'pending', selectedPocket: null })));
-          setPockets(pocketsData);
+          // Exclude the Unsorted system pocket — users assign to named pockets only
+          setPockets(pocketsData.filter(p => !p.is_unsorted));
           onRefreshInboxCount?.(userId); // Update the tab badge
         } catch (error) {
           console.error('Failed to load inbox:', error);
@@ -99,7 +100,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
     const pocketsRes = await fetch(`${API_URL}/pockets?userId=${userId}`);
-    setPockets(await pocketsRes.json());
+    const pocketsData = await pocketsRes.json();
+    setPockets(pocketsData.filter(p => !p.is_unsorted));
     onRefreshInboxCount?.(userId);
   };
 
