@@ -458,23 +458,49 @@ app.get('/transactions', async (req, res) => {
   res.json(data);
 });
 
-// GET /transactions/pocket/:pocketId — fetch all transactions assigned to a specific pocket
+// GET /transactions/pocket/:pocketId — fetch all transactions for a specific pocket.
+// Two sources combine here:
+//   1. Direct transactions (expenses / all-in-one income) whose pocket_id is this pocket,
+//      shown at their full amount.
+//   2. Distributed-income shares: this pocket's slice of a split paycheck, pulled from
+//      transaction_allocations and shown at the allocated amount (not the full paycheck).
 app.get('/transactions/pocket/:pocketId', async (req, res) => {
   const { pocketId } = req.params;
 
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('pocket_id', pocketId);
+  // 1. Direct transactions
+  const { data: direct, error: directErr } = await supabase
+    .from('transactions').select('*').eq('pocket_id', pocketId);
+  if (directErr) return res.status(500).json({ error: directErr.message });
 
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
+  // 2. This pocket's allocation shares
+  const { data: allocs, error: allocErr } = await supabase
+    .from('transaction_allocations').select('*').eq('pocket_id', pocketId);
+  if (allocErr) return res.status(500).json({ error: allocErr.message });
+
+  let allocTxs = [];
+  if (allocs && allocs.length > 0) {
+    const txIds = allocs.map(a => a.transaction_id);
+    const { data: txs } = await supabase.from('transactions').select('*').in('id', txIds);
+    const txById = Object.fromEntries((txs || []).map(t => [t.id, t]));
+    // Build a display row using the paycheck's merchant/date/icon but this pocket's share amount.
+    // The id is prefixed so it can't collide with a real transaction id in the list's keys.
+    allocTxs = allocs
+      .map(a => {
+        const t = txById[a.transaction_id];
+        return t ? { ...t, amount: a.amount, id: `alloc-${a.id}` } : null;
+      })
+      .filter(Boolean);
+  }
+
+  res.json([...(direct || []), ...allocTxs]);
 });
 
-// GET /transactions/inbox — fetch unassigned transactions for this user
+// GET /transactions/inbox — fetch unassigned transactions for this user.
+// Distributed income has a null pocket_id too, so we also exclude distributed=true
+// to keep already-handled paychecks out of the inbox.
 app.get('/transactions/inbox', async (req, res) => {
   const { userId } = req.query;
-  let query = supabase.from('transactions').select('*').is('pocket_id', null);
+  let query = supabase.from('transactions').select('*').is('pocket_id', null).eq('distributed', false);
   if (userId) query = query.eq('user_id', userId);
   const { data, error } = await query;
 
@@ -618,11 +644,19 @@ app.post('/transactions/distribute-income', async (req, res) => {
     if (updateErr) return res.status(500).json({ error: updateErr.message });
   }
 
-  // Assign the transaction to the pocket that received the largest share
-  const primary = distributions.reduce((a, b) => a.topUpAmount > b.topUpAmount ? a : b);
+  // Mark the transaction as distributed (keeps it out of the inbox) and record the
+  // per-pocket breakdown in transaction_allocations. We leave pocket_id null because
+  // the money was split across several pockets, not owned by any single one — each
+  // pocket's share is stored as its own allocation row instead.
   const { error: txErr } = await supabase
-    .from('transactions').update({ pocket_id: primary.pocketId }).eq('id', transactionId);
+    .from('transactions').update({ distributed: true }).eq('id', transactionId);
   if (txErr) return res.status(500).json({ error: txErr.message });
+
+  const allocationRows = distributions.map(d => ({
+    transaction_id: transactionId, pocket_id: d.pocketId, amount: d.topUpAmount,
+  }));
+  const { error: allocErr } = await supabase.from('transaction_allocations').insert(allocationRows);
+  if (allocErr) return res.status(500).json({ error: allocErr.message });
 
   // Subtract total distributed from Unsorted — income moved from Unsorted into named pockets
   const { data: txData } = await supabase.from('transactions').select('user_id').eq('id', transactionId).single();
@@ -817,11 +851,15 @@ app.post('/plaid/sync-transactions', async (req, res) => {
 
     res.json({ success: true, count: newTransactions.length });
   } catch (err) {
-    console.error('Plaid sync error:', err.response?.data || err.message);
+    // ITEM_LOGIN_REQUIRED is expected and handled — the bank connection expired and the user
+    // needs to reconnect. Log a short line instead of the full error dump.
     if (err.response?.data?.error_code === 'ITEM_LOGIN_REQUIRED') {
+      console.log('[sync] Bank connection expired — user needs to reconnect');
       await supabase.from('plaid_items').update({ needs_reconnect: true }).eq('user_id', userId);
       return res.status(400).json({ error: 'bank_login_required' });
     }
+    // Anything else is genuinely unexpected — keep the full details for debugging.
+    console.error('Plaid sync error:', err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to sync transactions' });
   }
 });

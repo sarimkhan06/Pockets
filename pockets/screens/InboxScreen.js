@@ -250,7 +250,9 @@ export default function InboxScreen({ onRefreshInboxCount }) {
           <View style={styles.empty}>
             <Text style={styles.emptyEmoji}>✓</Text>
             <Text style={styles.emptyTitle}>All caught up!</Text>
-            <Text style={styles.emptySubtitle}>No new transactions to review.</Text>
+            <Text style={styles.emptySubtitle}>
+              New transactions show up here after you sync. Assign each one to a pocket to keep your balances accurate.
+            </Text>
           </View>
         )}
 

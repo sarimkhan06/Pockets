@@ -122,15 +122,17 @@ export default function TransactionsScreen() {
         {sorted.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No transactions yet.</Text>
+            <Text style={styles.emptyHint}>Tap ⚡ Sync above to pull in your latest transactions.</Text>
           </View>
         ) : (
           <View style={styles.txCard}>
             {sorted.map((tx, index) => {
               // Look up this transaction's pocket info
               const pocket = getPocket(tx.pocket_id);
-              const pocketColor = pocket?.color ?? '#4A5E78'; // Default grey if no pocket
-              // tx.pocket_id exists but pocket not found = 'Unknown', no id = 'Inbox' (unassigned)
-              const pocketName = pocket?.name ?? (tx.pocket_id ? 'Unknown' : 'Inbox');
+              // Distributed income has no single pocket — it was split across several, so we tag it "Split"
+              const pocketColor = pocket?.color ?? (tx.distributed ? '#00D4AA' : '#4A5E78');
+              // pocket found = its name; distributed = 'Split'; has id but not found = 'Unknown'; else 'Inbox'
+              const pocketName = pocket?.name ?? (tx.distributed ? 'Split' : tx.pocket_id ? 'Unknown' : 'Inbox');
               return (
                 <View
                   key={tx.id}
@@ -180,8 +182,9 @@ const styles = StyleSheet.create({
   },
   syncBtnText: { fontSize: 13, fontWeight: '600', color: '#00D4AA' },
 
-  empty: { alignItems: 'center', paddingTop: 80 },
+  empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
   emptyText: { fontSize: 15, color: '#8899AA' },
+  emptyHint: { fontSize: 13, color: '#4A5E78', textAlign: 'center', marginTop: 8, lineHeight: 20 },
 
   txCard: {
     marginHorizontal: 20, backgroundColor: '#151F32', borderRadius: 16,

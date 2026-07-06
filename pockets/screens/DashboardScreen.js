@@ -160,9 +160,7 @@ export default function DashboardScreen({ navigation }) {
             <View style={styles.unsortedLeft}>
               <Text style={styles.unsortedLabel}>Unsorted</Text>
               <Text style={styles.unsortedSub}>
-                {unsortedPocket.balance < 0
-                  ? 'A transaction is on its way through Plaid — assign it once it appears in your inbox'
-                  : 'Income or a deposit is making its way through Plaid'}
+                One or more transactions are making their way through Plaid — assign them once they appear in your inbox
               </Text>
             </View>
             <Text style={[styles.unsortedAmount, { color: unsortedPocket.balance < 0 ? '#FF5252' : '#00D4AA' }]}>
