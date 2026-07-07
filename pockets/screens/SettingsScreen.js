@@ -11,8 +11,9 @@
 // Defining it here (instead of a separate file) avoids over-engineering since it's
 // only used within this screen.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../lib/supabase';
 import { API_URL } from '../lib/config';
 import { TEMPLATES } from '../data/onboardingData';
@@ -58,8 +59,9 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
     }
   }, []);
 
-  // Run loadData once when the screen mounts
-  useEffect(() => { loadData(); }, [loadData]);
+  // Re-run every time the screen comes into focus — e.g. after reconnecting the bank
+  // in ConnectBankScreen and navigating back, so the status shown here stays current.
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
   // Called by the "Sync" button in the Bank section — pulls latest transactions from Plaid
   const handleSync = async () => {

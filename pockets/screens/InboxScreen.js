@@ -46,6 +46,8 @@ export default function InboxScreen({ onRefreshInboxCount }) {
   const [distributionMode, setDistributionMode] = useState('method'); // 'method' | 'all_in_one' | 'custom'
   const [selectedSinglePocket, setSelectedSinglePocket] = useState(null); // For 'all_in_one' mode
   const [customAmounts, setCustomAmounts] = useState({}); // For 'custom' mode: { pocketId: '50.00', ... }
+  // Expense mode — 'single' charges one pocket (with overflow), 'split' spreads it across several
+  const [expenseMode, setExpenseMode] = useState('single'); // 'single' | 'split'
 
   // Reload every time the user navigates to this tab (a new transaction might have arrived)
   useFocusEffect(
@@ -87,6 +89,7 @@ export default function InboxScreen({ onRefreshInboxCount }) {
     setDistributionMode('method');
     setSelectedSinglePocket(null);
     setCustomAmounts({});
+    setExpenseMode('single');
   }, [expandedId]);
 
   // Toggle the expanded picker panel open/closed
@@ -273,6 +276,14 @@ export default function InboxScreen({ onRefreshInboxCount }) {
               const customDist = pockets
                 .filter(p => parseFloat(customAmounts[p.id] || '0') > 0)
                 .map(p => ({ pocketId: p.id, topUpAmount: parseFloat(customAmounts[p.id]) }));
+
+              // Expense split: same custom-amount UI, but the shares are NEGATIVE (money out).
+              // Reuses distribute-income on the backend, which is sign-agnostic.
+              const expenseTarget = Math.abs(item.amount);
+              const isExpenseSplitValid = Math.abs(totalCustom - expenseTarget) < 0.01;
+              const expenseSplitDist = pockets
+                .filter(p => parseFloat(customAmounts[p.id] || '0') > 0)
+                .map(p => ({ pocketId: p.id, topUpAmount: -parseFloat(customAmounts[p.id]) }));
 
               return (
               <View key={item.id}>
@@ -491,26 +502,87 @@ export default function InboxScreen({ onRefreshInboxCount }) {
                           )}
                         </>
                       ) : (
-                        // ── NORMAL EXPENSE PICKER ────────────────────────────────────
-                        // Show all pockets; tapping one calls assignPocket (may trigger overflow)
+                        // ── EXPENSE PICKER ────────────────────────────────────
                         <>
-                          <Text style={styles.pickerLabel}>Choose a pocket</Text>
-                          {pockets.map(pocket => (
-                            <TouchableOpacity
-                              key={pocket.id}
-                              style={styles.pickerRow}
-                              onPress={() => assignPocket(item, pocket)}
-                              activeOpacity={0.7}
-                              disabled={pendingPocketId !== null}
-                            >
-                              <View style={[styles.pickerDot, { backgroundColor: pocket.color }]} />
-                              <Text style={styles.pickerName}>{pocket.name}</Text>
-                              {pendingPocketId === pocket.id
-                                ? <ActivityIndicator size="small" color="#00D4AA" />
-                                : <Text style={styles.pickerLeft}>${formatCurrency(pocket.balance)}</Text>
-                              }
-                            </TouchableOpacity>
-                          ))}
+                          {/* Mode selector: charge one pocket, or split across several */}
+                          <View style={styles.modeRow}>
+                            {[
+                              { key: 'single', label: 'One pocket' },
+                              { key: 'split',  label: 'Split' },
+                            ].map(m => (
+                              <TouchableOpacity
+                                key={m.key}
+                                style={[styles.modeBtn, expenseMode === m.key && styles.modeBtnActive]}
+                                onPress={() => setExpenseMode(m.key)}
+                              >
+                                <Text style={[styles.modeBtnText, expenseMode === m.key && styles.modeBtnTextActive]}>
+                                  {m.label}
+                                </Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+
+                          {expenseMode === 'single' ? (
+                            // Charge one pocket; tapping one calls assignPocket (may trigger overflow)
+                            <>
+                              <Text style={styles.pickerLabel}>Choose a pocket</Text>
+                              {pockets.map(pocket => (
+                                <TouchableOpacity
+                                  key={pocket.id}
+                                  style={styles.pickerRow}
+                                  onPress={() => assignPocket(item, pocket)}
+                                  activeOpacity={0.7}
+                                  disabled={pendingPocketId !== null}
+                                >
+                                  <View style={[styles.pickerDot, { backgroundColor: pocket.color }]} />
+                                  <Text style={styles.pickerName}>{pocket.name}</Text>
+                                  {pendingPocketId === pocket.id
+                                    ? <ActivityIndicator size="small" color="#00D4AA" />
+                                    : <Text style={styles.pickerLeft}>${formatCurrency(pocket.balance)}</Text>
+                                  }
+                                </TouchableOpacity>
+                              ))}
+                            </>
+                          ) : (
+                            // Split: type how much of this expense comes from each pocket
+                            <>
+                              <Text style={styles.pickerLabel}>Enter how much comes from each pocket</Text>
+                              {pockets.map(p => (
+                                <View key={p.id} style={styles.pickerRow}>
+                                  <View style={[styles.pickerDot, { backgroundColor: p.color }]} />
+                                  <Text style={styles.pickerName}>{p.name}</Text>
+                                  <View style={styles.customInputWrap}>
+                                    <Text style={styles.customInputSign}>$</Text>
+                                    <TextInput
+                                      style={styles.customInput}
+                                      keyboardType="numeric"
+                                      value={customAmounts[p.id] || ''}
+                                      onChangeText={v => setCustomAmounts(prev => ({ ...prev, [p.id]: v }))}
+                                      placeholder="0"
+                                      placeholderTextColor="#4A5E78"
+                                    />
+                                  </View>
+                                </View>
+                              ))}
+                              {/* Running total — turns green when it matches the expense amount */}
+                              <Text style={[styles.customTotal, isExpenseSplitValid ? { color: '#00D4AA' } : { color: '#8899AA' }]}>
+                                Total: ${formatCurrency(totalCustom)} / ${formatCurrency(expenseTarget)}
+                              </Text>
+                              {isExpenseSplitValid && (
+                                <TouchableOpacity
+                                  style={[styles.distributeBtn, pendingPocketId === 'distributing' && { opacity: 0.7 }]}
+                                  onPress={() => distributeIncome(item, expenseSplitDist)}
+                                  disabled={pendingPocketId === 'distributing'}
+                                  activeOpacity={0.8}
+                                >
+                                  {pendingPocketId === 'distributing'
+                                    ? <ActivityIndicator size="small" color="#0B1120" />
+                                    : <Text style={styles.distributeBtnText}>Confirm</Text>
+                                  }
+                                </TouchableOpacity>
+                              )}
+                            </>
+                          )}
                         </>
                       )}
                     </View>
@@ -571,10 +643,10 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
 
-  empty: { alignItems: 'center', paddingTop: 80 },
+  empty: { alignItems: 'center', paddingTop: 80, paddingHorizontal: 40 },
   emptyEmoji: { fontSize: 40, marginBottom: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#FFFFFF', marginBottom: 4 },
-  emptySubtitle: { fontSize: 14, color: '#8899AA' },
+  emptySubtitle: { fontSize: 14, color: '#8899AA', textAlign: 'center', lineHeight: 20 },
 
   sectionLabel: {
     fontSize: 12, fontWeight: '700', color: '#8899AA',
