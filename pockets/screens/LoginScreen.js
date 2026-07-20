@@ -123,7 +123,10 @@ export default function LoginScreen({ onLogin, onSignUp }) {
         if (aalData.nextLevel === 'aal2' && aalData.nextLevel !== aalData.currentLevel) {
           // User has 2FA but hasn't verified it yet for this session — show the code screen
           const { data: factorsData } = await supabase.auth.mfa.listFactors();
-          const totp = factorsData.totp[0]; // Get the first (and usually only) TOTP factor
+          // Pick the verified factor specifically — enrolling (even an abandoned attempt)
+          // can leave unverified leftover factors on the account, and checking against one
+          // of those would never match the code in the user's actual authenticator app.
+          const totp = factorsData.totp.find(f => f.status === 'verified') || factorsData.totp[0];
           if (totp) {
             // Create a challenge: this is a short-lived token that authorizes one verification attempt
             const { data: challenge } = await supabase.auth.mfa.challenge({ factorId: totp.id });
@@ -174,6 +177,12 @@ export default function LoginScreen({ onLogin, onSignUp }) {
     } catch (e) {
       Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
       setMfaCode(''); // Clear the code field so user can try again
+      // The old challenge may have expired by now — get a fresh one so the next
+      // attempt has a real chance, instead of retrying against a dead challenge.
+      try {
+        const { data: challenge } = await supabase.auth.mfa.challenge({ factorId });
+        setChallengeId(challenge.id);
+      } catch (e2) {}
     } finally {
       setLoading(false);
     }
