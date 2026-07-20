@@ -753,7 +753,7 @@ app.post('/plaid/sync-transactions', async (req, res) => {
     // and the credit card side (credit received). Filtering them prevents double-counting since
     // individual credit card purchases are tracked separately from the CC account.
     const plaidTransactions = response.data.transactions.filter(tx =>
-      tx.personal_finance_category?.detailed !== 'CREDIT_CARD_PAYMENT'
+      tx.personal_finance_category?.detailed !== 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
     );
 
     // Convert Plaid's "YYYY-MM-DD" date to our "Mon D" format

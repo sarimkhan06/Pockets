@@ -24,6 +24,8 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
   const [bankNeedsReconnect, setBankNeedsReconnect] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [mfaFactor, setMfaFactor] = useState(null); // the verified TOTP factor, or null if 2FA isn't enabled
+  const [mfaBusy, setMfaBusy] = useState(false);    // spinner while disabling 2FA
   // Local copies so Settings can update itself without waiting for App.js prop updates
   const [displayMethod, setDisplayMethod] = useState(currentMethod);
   const [localUserName, setLocalUserName] = useState(userName);
@@ -53,6 +55,10 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
       if (settings?.method_id && TEMPLATES[settings.method_id]) {
         setDisplayMethod(TEMPLATES[settings.method_id]);
       }
+
+      // Check the real 2FA status directly from Supabase — only a verified factor counts
+      const { data: factorsData } = await supabase.auth.mfa.listFactors();
+      setMfaFactor(factorsData?.totp?.find(f => f.status === 'verified') || null);
     } catch (e) {
       setBackup({ hasBackup: false });
       setBankConnected(false);
@@ -127,6 +133,35 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
       Alert.alert('Error', 'Could not reach the server.');
     } finally {
       setRestoring(false);
+    }
+  };
+
+  // Tapping the 2FA row: go to setup if it's off, or offer to disable it if it's on
+  const handleMFAPress = () => {
+    if (!mfaFactor) {
+      navigation.navigate('MFASetup');
+      return;
+    }
+    Alert.alert(
+      'Disable Two-Factor Auth',
+      'You will only need your password to log in. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Disable', style: 'destructive', onPress: disableMFA },
+      ]
+    );
+  };
+
+  const disableMFA = async () => {
+    setMfaBusy(true);
+    try {
+      const { error } = await supabase.auth.mfa.unenroll({ factorId: mfaFactor.id });
+      if (error) throw error;
+      setMfaFactor(null);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'Failed to disable 2FA');
+    } finally {
+      setMfaBusy(false);
     }
   };
 
@@ -239,8 +274,15 @@ export default function SettingsScreen({ onLogout, onRetakeQuiz, userName, curre
         {/* Account section */}
         <Text style={styles.sectionLabel}>Account</Text>
         <View style={styles.section}>
-          {/* 2FA status — read-only display, actual setup is via MFASetup screen */}
-          <Row icon="🔐" label="Two-Factor Auth" value="Enabled" />
+          {/* 2FA status — tap to set up if off, or to disable if on */}
+          <Row
+            icon="🔐"
+            label="Two-Factor Auth"
+            value={mfaFactor === null ? 'Not enabled' : 'Enabled'}
+            valueColor={mfaFactor ? '#00D4AA' : '#8899AA'}
+            onPress={handleMFAPress}
+            loading={mfaBusy}
+          />
           <Row icon="🔑" label="Change Password" onPress={() => navigation.navigate('ChangePassword')} />
           {/* Sign out — danger=true makes the label red */}
           <Row icon="🚪" label="Sign Out" onPress={handleLogout} danger />
