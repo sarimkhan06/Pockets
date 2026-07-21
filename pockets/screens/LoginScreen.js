@@ -134,10 +134,10 @@ export default function LoginScreen({ onLogin, onSignUp }) {
             setChallengeId(challenge.id);
             setStep('mfa'); // Switch UI to the 6-digit code input
           } else {
-            onLogin(); // No factors found despite aal2 requirement — log in anyway
+            await onLogin(); // No factors found despite aal2 requirement — log in anyway
           }
         } else {
-          onLogin(); // No MFA required — go straight to the app
+          await onLogin(); // No MFA required — go straight to the app
         }
       }
     }
@@ -173,7 +173,12 @@ export default function LoginScreen({ onLogin, onSignUp }) {
       // If it matches, the session is elevated to aal2 and the user is fully authenticated.
       const { error } = await supabase.auth.mfa.verify({ factorId, challengeId, code: mfaCode });
       if (error) throw error;
-      onLogin(); // MFA passed — transition to the main app
+      // Wait for the full transition (fetches settings + Plaid status from the backend)
+      // instead of firing and forgetting — otherwise the spinner stops early and the screen
+      // just sits there while that request is still in flight, especially if the backend
+      // is a free-tier host waking up from being idle. That looked like a silent failure,
+      // tempting a retry that would fail since this challenge is already used.
+      await onLogin(); // MFA passed — transition to the main app
     } catch (e) {
       Alert.alert('Invalid code', 'That code is incorrect. Please try again.');
       setMfaCode(''); // Clear the code field so user can try again
