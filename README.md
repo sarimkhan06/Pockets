@@ -54,7 +54,7 @@ cd Pockets
 
 1. Create a new Supabase project.
 2. Open the **SQL editor** and run the contents of [`schema.sql`](schema.sql) to create the tables.
-3. From **Settings → Data API**, copy your **Project URL**.
+3. Click **Connect** (top of the dashboard) → **Framework** tab → copy the `NEXT_PUBLIC_SUPABASE_URL` value from the `.env.local` snippet shown. That's your Project URL.
 4. From **Settings → API Keys**, copy your **anon public** and **service_role** keys (you'll need all three below).
 
 ### 3. Bank integration (Plaid)
@@ -74,6 +74,8 @@ Sandbox is free and needs no approval, so start here — no real bank required. 
 | 2FA code (if asked) | `1234` |
 
 You'll get realistic fake accounts and transactions — enough to try every feature.
+
+To test new transactions arriving over time (rather than a fixed history), reconnect using username `user_transactions_dynamic` (any bank, same password as above). Plaid's Sandbox dashboard has other persona test users too, if you want different data patterns. Note reconnecting replaces your existing bank connection — use a fresh account if you don't want your current pockets/transactions to look mismatched against it.
 
 #### Connecting your own real bank
 
@@ -163,6 +165,8 @@ The app auto-detects your computer's IP from the Expo bundler, so no manual IP e
 **`JSON Parse error: Unexpected character: <`** — the app reached something that returned a web page instead of your API. Almost always the backend isn't reachable: the server isn't running, or your phone is on a different network than your computer (mobile data instead of WiFi will do it). To check, open `http://<your-computer-ip>:3000/plaid/status?userId=test` in your phone's browser — you should get JSON back, even if it's an error.
 
 **Scanning the QR does nothing** — you're likely scanning with Expo Go rather than the development build from step 5. Expo Go can't run this project.
+
+**`email rate limit exceeded` on sign-up** — Supabase's default email sender is rate-limited regardless of user count. For local dev, disable it: **Authentication → Sign In / Providers → Email** → turn off "Confirm email."
 
 ## How it works
 
