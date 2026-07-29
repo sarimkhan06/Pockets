@@ -102,13 +102,15 @@ The server runs on **port 3000**.
 
 ### 5. Frontend
 
-1. Open `pockets/lib/supabase.js` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY` to your own project's values.
-2. Install dependencies:
+Set up your Supabase credentials and install dependencies:
 
 ```bash
 cd pockets
+cp .env.example .env      # then fill in your Supabase URL + anon key in .env
 npm install
 ```
+
+The app reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from that file. If either is missing the app fails immediately with a clear message, rather than silently pointing at the wrong project.
 
 > **Why not Expo Go?** Pockets uses `react-native-plaid-link-sdk`, a *native* module, to connect banks. Expo Go only contains Expo's own native modules, so bank connection can't work there. Instead you install a **development build** — a one-time custom build of this app that includes it. Afterwards the workflow is identical to Expo Go: same QR code, same live reload.
 
@@ -116,11 +118,20 @@ npm install
 
 ```bash
 npm install -g eas-cli
-eas login
+eas login                 # free Expo account
+eas init                  # links this clone to YOUR Expo project
 eas build --profile development --platform android
 ```
 
+`eas init` matters — `app.json` ships with the original author's Expo project ID, and you won't have access to it. This replaces it with your own.
+
 Builds in Expo's cloud (~10–15 min), then gives you a link. Open it on your phone, download the APK, and allow "install from unknown sources." You now have a **Pockets** dev app installed.
+
+Because `.env` is gitignored it isn't uploaded to EAS, so cloud builds need the same two values stored with Expo:
+
+```bash
+eas env:push --environment development --path .env
+```
 
 #### iPhone
 
