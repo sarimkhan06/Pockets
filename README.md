@@ -65,7 +65,7 @@ cd Pockets
 
 #### Start with Sandbox
 
-Sandbox is free, instant, and needs no approval — no real bank required. Set `PLAID_ENV=sandbox` and use your Sandbox secret. When Plaid Link opens in the app, pick any bank and log in with Plaid's test credentials:
+Sandbox is free and needs no approval, so start here — no real bank required. Set `PLAID_ENV=sandbox` and use your Sandbox secret. When Plaid Link opens in the app, pick any bank and log in with Plaid's test credentials:
 
 | Field | Value |
 |---|---|
@@ -73,7 +73,7 @@ Sandbox is free, instant, and needs no approval — no real bank required. Set `
 | Password | `pass_good` |
 | 2FA code (if asked) | `1234` |
 
-You'll get realistic fake accounts and transactions — enough to exercise every feature in the app.
+You'll get realistic fake accounts and transactions — enough to try every feature.
 
 #### Connecting your own real bank
 
@@ -86,7 +86,7 @@ Either way, in `server/.env` set `PLAID_ENV=production` **and** replace `PLAID_S
 
 > This app requests `country_codes: [CA, US]`, so Plaid Link will show Canadian and US institutions.
 
-Real connections behave differently from Sandbox in ways worth knowing before you rely on them — see [Notes & limitations](#notes--limitations).
+Real connections behave differently from Sandbox — see [Notes & limitations](#notes--limitations) before relying on one.
 
 ### 4. Backend
 > **Note:** You'll need two terminal windows/tabs open at once — one for the backend, one for the frontend (step 5) — since both need to keep running simultaneously.
@@ -119,11 +119,11 @@ The app reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` fro
 ```bash
 npm install -g eas-cli
 eas login                 # free Expo account
-eas init                  # links this clone to YOUR Expo project
+eas init                  # creates your own Expo project
 eas build --profile development --platform android
 ```
 
-`eas init` matters — `app.json` ships with the original author's Expo project ID, and you won't have access to it. This replaces it with your own.
+Don't skip `eas init`. The project ID committed in `app.json` belongs to someone else's Expo account, so EAS will reject your build. `eas init` swaps in a project on your own account.
 
 Builds in Expo's cloud (~10–15 min), then gives you a link. Open it on your phone, download the APK, and allow "install from unknown sources." You now have a **Pockets** dev app installed.
 
@@ -143,7 +143,7 @@ Apple requires a signing certificate to install any app on a physical device:
 | Mac + Xcode | Free | `npx expo run:ios --device` with a free Apple ID; the app expires after 7 days and must be reinstalled |
 | iOS Simulator | Free | Add `"simulator": true` to the iOS development profile in `eas.json`; requires a Mac |
 
-There's no free path to a lasting install on a physical iPhone — that's Apple's policy, not a limitation of this project.
+There's no free way to get a lasting install on a physical iPhone. That's Apple's policy.
 
 ### 6. Run it
 
