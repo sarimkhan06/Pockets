@@ -120,18 +120,13 @@ The app reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` fro
 npm install -g eas-cli
 eas login                 # free Expo account
 eas init                  # creates your own Expo project
+eas env:push --environment development --path .env   # your .env is gitignored, so EAS needs its own copy
 eas build --profile development --platform android
 ```
 
 Don't skip `eas init`. The project ID committed in `app.json` belongs to someone else's Expo account, so EAS will reject your build. `eas init` swaps in a project on your own account.
 
 Builds in Expo's cloud (~10–15 min), then gives you a link. Open it on your phone, download the APK, and allow "install from unknown sources." You now have a **Pockets** dev app installed.
-
-Because `.env` is gitignored it isn't uploaded to EAS, so cloud builds need the same two values stored with Expo:
-
-```bash
-eas env:push --environment development --path .env
-```
 
 #### iPhone
 
