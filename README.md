@@ -35,9 +35,11 @@ Pockets/
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) (v18+)
-- The **Expo Go** app on your phone ([iOS](https://apps.apple.com/app/expo-go/id982107779) / [Android](https://play.google.com/store/apps/details?id=host.exp.exponent))
+- A free [Expo account](https://expo.dev/signup) — required to build the app
 - A free [Supabase](https://supabase.com/) account
 - A [Plaid](https://plaid.com/) account (sandbox is free)
+- **Android:** any Android phone
+- **iPhone:** requires a paid Apple Developer account or a Mac — see [step 5](#5-frontend)
 
 ## Setup
 
@@ -59,7 +61,32 @@ cd Pockets
 
 1. Create a Plaid account and open the dashboard.
 2. On the Home page, go to **Explore** and click **Test Sandbox** (or **Sandbox** in the left nav → **Test Sandbox**).
-3. From there, copy your **client ID** and **secret** — start with the sandbox environment (fake test banks), no real bank needed to try the app.
+3. From there, copy your **client ID** and **secret**.
+
+#### Start with Sandbox
+
+Sandbox is free, instant, and needs no approval — no real bank required. Set `PLAID_ENV=sandbox` and use your Sandbox secret. When Plaid Link opens in the app, pick any bank and log in with Plaid's test credentials:
+
+| Field | Value |
+|---|---|
+| Username | `user_good` |
+| Password | `pass_good` |
+| 2FA code (if asked) | `1234` |
+
+You'll get realistic fake accounts and transactions — enough to exercise every feature in the app.
+
+#### Connecting your own real bank
+
+Real bank data requires Plaid's Production environment. Two ways in:
+
+- **Trial plan** — free, and the simplest route. Teams in the US/Canada created on or after April 15, 2026 get a Trial plan supporting up to **10 live connections** with most OAuth banks, with no wait for full approval.
+- **Full Production** — request it in the Plaid dashboard. Requires completing your application profile, company profile, and a security questionnaire. Expect a few business days.
+
+Either way, in `server/.env` set `PLAID_ENV=production` **and** replace `PLAID_SECRET` with your Production secret — Plaid issues a different secret per environment, which is easy to miss.
+
+> This app requests `country_codes: [CA, US]`, so Plaid Link will show Canadian and US institutions.
+
+Real connections behave differently from Sandbox in ways worth knowing before you rely on them — see [Notes & limitations](#notes--limitations).
 
 ### 4. Backend
 > **Note:** You'll need two terminal windows/tabs open at once — one for the backend, one for the frontend (step 5) — since both need to keep running simultaneously.
@@ -76,17 +103,60 @@ The server runs on **port 3000**.
 ### 5. Frontend
 
 1. Open `pockets/lib/supabase.js` and set `SUPABASE_URL` and `SUPABASE_ANON_KEY` to your own project's values.
-2. Then:
+2. Install dependencies:
 
 ```bash
 cd pockets
 npm install
-npx expo start
 ```
 
-3. Scan the QR code with **Expo Go** on your phone.
+> **Why not Expo Go?** Pockets uses `react-native-plaid-link-sdk`, a *native* module, to connect banks. Expo Go only contains Expo's own native modules, so bank connection can't work there. Instead you install a **development build** — a one-time custom build of this app that includes it. Afterwards the workflow is identical to Expo Go: same QR code, same live reload.
 
-The app auto-detects your computer's IP from the Expo bundler, so the phone knows where to reach the backend — no manual IP editing needed.
+#### Android
+
+```bash
+npm install -g eas-cli
+eas login
+eas build --profile development --platform android
+```
+
+Builds in Expo's cloud (~10–15 min), then gives you a link. Open it on your phone, download the APK, and allow "install from unknown sources." You now have a **Pockets** dev app installed.
+
+#### iPhone
+
+Apple requires a signing certificate to install any app on a physical device:
+
+| Option | Cost | Notes |
+|---|---|---|
+| Apple Developer Program | $99/year | `eas build --profile development --platform ios` — works like Android |
+| Mac + Xcode | Free | `npx expo run:ios --device` with a free Apple ID; the app expires after 7 days and must be reinstalled |
+| iOS Simulator | Free | Add `"simulator": true` to the iOS development profile in `eas.json`; requires a Mac |
+
+There's no free path to a lasting install on a physical iPhone — that's Apple's policy, not a limitation of this project.
+
+### 6. Run it
+
+Two terminals:
+
+```bash
+# Terminal 1 — backend
+cd server && npm run dev
+
+# Terminal 2 — app
+cd pockets && npx expo start
+```
+
+Open the **Pockets** dev app on your phone and it will connect to Metro. Your phone and computer must be on the same WiFi network.
+
+The app auto-detects your computer's IP from the Expo bundler, so no manual IP editing is needed.
+
+**You only build once.** JS changes hot-reload over Metro — you'd only rebuild if native dependencies change.
+
+### Troubleshooting
+
+**`JSON Parse error: Unexpected character: <`** — the app reached something that returned a web page instead of your API. Almost always the backend isn't reachable: the server isn't running, or your phone is on a different network than your computer (mobile data instead of WiFi will do it). To check, open `http://<your-computer-ip>:3000/plaid/status?userId=test` in your phone's browser — you should get JSON back, even if it's an error.
+
+**Scanning the QR does nothing** — you're likely scanning with Expo Go rather than the development build from step 5. Expo Go can't run this project.
 
 ## How it works
 
@@ -114,8 +184,8 @@ Instead, every sync re-reads your live bank balance directly and forces your poc
 This is a development / learning project, not a hosted product.
 
 **Running it:**
-- The backend runs on your own computer. Your phone talks to it over local WiFi via Expo Go, so both need to be on the same network with the server running — it isn't deployed anywhere.
-- Plaid's **sandbox** environment (fake test banks) is enough to try the whole app. Real bank data requires Plaid's **production** environment, which needs approval from Plaid and is subject to their review process.
+- The backend runs on your own computer. Your phone talks to it over local WiFi via the development build, so both need to be on the same network with the server running — it isn't deployed anywhere.
+- Plaid's **Sandbox** environment (fake test banks) is enough to exercise the whole app. Connecting a real bank requires Production access — see [step 3](#3-bank-integration-plaid).
 
 **Bank behavior (this affects real bank connections, not sandbox):**
 - **One bank connection per user.** Connecting accounts at two different banks (separate Plaid connections) isn't supported yet — only multiple accounts *within* the same connected institution (e.g. chequing + credit card at the same bank).
