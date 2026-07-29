@@ -4,6 +4,19 @@ An envelope-budgeting mobile app. Connect your bank, and Pockets organizes your 
 
 Instead of opening a separate bank account to set money aside for something, you create a pocket for it — the money stays in your real account, but it's earmarked.
 
+<table>
+<tr>
+<td><img src="docs/screenshots/login.jpg" width="220" alt="Login screen" /></td>
+<td><img src="docs/screenshots/dashboard.jpg" width="220" alt="Dashboard with total balance and pockets" /></td>
+<td><img src="docs/screenshots/plaid-connect.jpg" width="220" alt="Connecting a real bank via Plaid" /></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/inbox-overflow.jpg" width="220" alt="Splitting an expense that overflows one pocket" /></td>
+<td><img src="docs/screenshots/income-distribution.jpg" width="220" alt="Distributing income across pockets by percentage" /></td>
+<td><img src="docs/screenshots/settings.jpg" width="220" alt="Settings with 2FA and bank connection status" /></td>
+</tr>
+</table>
+
 ## Features
 
 - **Real bank data** via Plaid — live balances and transactions
