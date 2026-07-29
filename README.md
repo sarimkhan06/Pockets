@@ -52,19 +52,21 @@ cd Pockets
 
 1. Create a new Supabase project.
 2. Open the **SQL editor** and run the contents of [`schema.sql`](schema.sql) to create the tables.
-3. From **Settings → API**, copy your **Project URL**, **anon key**, and **service role key** (you'll need them below).
+3. From **Settings → Data API**, copy your **Project URL**.
+4. From **Settings → API Keys**, copy your **anon public** and **service_role** keys (you'll need all three below).
 
 ### 3. Bank integration (Plaid)
 
 1. Create a Plaid account and open the dashboard.
-2. From **Team Settings → Keys**, copy your **client ID** and **secret**.
-3. Start with the **sandbox** environment (fake test banks) — no real bank needed to try the app.
+2. On the Home page, go to **Explore** and click **Test Sandbox** (or **Sandbox** in the left nav → **Test Sandbox**).
+3. From there, copy your **client ID** and **secret** — start with the sandbox environment (fake test banks), no real bank needed to try the app.
 
 ### 4. Backend
+> **Note:** You'll need two terminal windows/tabs open at once — one for the backend, one for the frontend (step 5) — since both need to keep running simultaneously.
 
 ```bash
 cd server
-cp .env.example .env      # then fill in your Supabase + Plaid values
+cp .env.example .env      # then fill in your Supabase + Plaid values in .env
 npm install
 npm run dev               # or: node index.js
 ```
